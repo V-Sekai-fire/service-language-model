@@ -1,7 +1,7 @@
 [workspace]
 name = "strata-qwen38-flash"
 version = "0.1.39"
-description = "Zero-argument Strata v0.1.39 launcher for Qwen3.8-Flash-Next 2-bit with 4x parallel batching"
+description = "Zero-argument launcher for Strata v0.1.39 pinned release with dual 3090+4090 GPUs"
 channels = ["conda-forge", "nvidia"]
 platforms = ["win-64", "linux-64"]
 
@@ -9,6 +9,9 @@ platforms = ["win-64", "linux-64"]
 python = "3.11.*"
 git = "*"
 huggingface_hub = ">=0.28"
+fastapi = "*"
+uvicorn = "*"
+requests = "*"
 
 [target.win-64.dependencies]
 cuda-toolkit = ">=12.4"
@@ -19,27 +22,44 @@ cuda-toolkit = ">=12.4"
 [tasks]
 default = { depends-on = ["serve"] }
 
-# Downloads 2-bit GSQ-RCO IQ2_XS subfolder shards for Qwen3.8-Flash-Next
-dl-model = "hf download ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF --include 'IQ2_XS/*' --local-dir ./models"
-
-[target.win-64.tasks]
-dl-strata = { cmd = '''python -c "
-import os, urllib.request, zipfile
-target = 'strata-bin/strata.exe'
-if not os.path.exists(target):
-    print('Fetching Strata v0.1.39 binary...')
-    url = 'https://github.com/Niko1221/Strata/releases/download/v0.1.39/strata-windows-x64-cuda12.zip'
-    os.makedirs('strata-bin', exist_ok=True)
-    zpath = 'strata_temp.zip'
-    urllib.request.urlretrieve(url, zpath)
-    with zipfile.ZipFile(zpath, 'r') as z:
-        z.extractall('strata-bin')
-    if os.path.exists(zpath): os.remove(zpath)
-    print('Strata v0.1.39 binary extracted successfully.')
+dl-strata-repo = { cmd = '''python -c "
+import os, urllib.request, zipfile, shutil, glob
+if not os.path.exists('Strata-src'):
+    print('Downloading Strata v0.1.39 release source archive...')
+    url = 'https://github.com/Niko1221/Strata/archive/refs/tags/v0.1.39.zip'
+    urllib.request.urlretrieve(url, 'strata_release.zip')
+    temp_dir = 'strata_temp_src'
+    os.makedirs(temp_dir, exist_ok=True)
+    with zipfile.ZipFile('strata_release.zip', 'r') as z:
+        z.extractall(temp_dir)
+    extracted_folders = [f for f in glob.glob(os.path.join(temp_dir, '*')) if os.path.isdir(f)]
+    if extracted_folders:
+        shutil.move(extracted_folders[0], 'Strata-src')
+    shutil.rmtree(temp_dir, ignore_errors=True)
+    if os.path.exists('strata_release.zip'): os.remove('strata_release.zip')
+    print('Strata v0.1.39 release source extracted to Strata-src.')
 "''' }
 
-serve = { depends-on = ["dl-model", "dl-strata"], cmd = '''python -c "
+dl-model = "hf download ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF --include 'IQ2_XS/*' --local-dir ./Strata-src/models"
+
+[target.win-64.tasks]
+dl-engine = { cmd = '''python -c "
+import os, urllib.request, zipfile
+target = 'Strata-src/strata.exe'
+if not os.path.exists(target):
+    print('Fetching Strata v0.1.39 C++ engine binary...')
+    url = 'https://github.com/Niko1221/Strata/releases/download/v0.1.39/strata-windows-x64-cuda12.zip'
+    zpath = 'strata_engine.zip'
+    urllib.request.urlretrieve(url, zpath)
+    with zipfile.ZipFile(zpath, 'r') as z:
+        z.extractall('Strata-src')
+    if os.path.exists(zpath): os.remove(zpath)
+    print('Strata C++ engine binary extracted to Strata-src.')
+"''' }
+
+serve = { depends-on = ["dl-strata-repo", "dl-model", "dl-engine"], cmd = '''python -c "
 import os, secrets, subprocess, sys, glob
+
 env_file = '.env'
 key = None
 if os.path.exists(env_file):
@@ -52,50 +72,45 @@ if not key:
     key = secrets.token_hex(16)
     with open(env_file, 'a') as f:
         f.write(f'STRATA_API_KEY={key}\n')
-    print('Generated new STRATA_API_KEY in .env')
-else:
-    print('Loaded STRATA_API_KEY from .env')
 
-# Search recursively for shard 1 or direct GGUF file inside nested directories
-model_files = glob.glob(r'./models/**/*IQ2_XS*00001*.gguf', recursive=True) + glob.glob(r'./models/**/*IQ2_XS*.gguf', recursive=True)
+model_files = glob.glob(r'./Strata-src/models/**/IQ2_XS/*00001*.gguf', recursive=True) + glob.glob(r'./Strata-src/models/**/IQ2_XS/*.gguf', recursive=True)
 if not model_files:
-    sys.exit('Error: No Qwen3.8-Flash-Next IQ2_XS GGUF file found in ./models')
+    sys.exit('Error: No IQ2_XS model file found in Strata-src/models.')
 
-model_path = model_files[0]
-print(f'Starting Strata with model: {model_path}')
+model_path = os.path.abspath(model_files[0])
+os.chdir('Strata-src')
 
 cmd = [
-    r'.\strata-bin\strata.exe',
-    'serve',
+    sys.executable,
+    os.path.join('serve', 'server.py'),
+    '--engine', r'.\strata.exe',
     '--model', model_path,
     '--parallel', '4',
-    '--layer-split', 'auto',
-    '--cors-origins', '*',
-    '--api-key', key,
     '--host', '0.0.0.0',
-    '--port', '9931'
+    '--port', '9931',
+    '--api-key', key
 ]
 sys.exit(subprocess.call(cmd))
 "''', env = { CUDA_VISIBLE_DEVICES = "0,1" } }
 
 [target.linux-64.tasks]
-dl-strata = { cmd = '''python -c "
+dl-engine = { cmd = '''python -c "
 import os, urllib.request, tarfile
-target = 'strata-bin/strata'
+target = 'Strata-src/strata'
 if not os.path.exists(target):
-    print('Fetching Strata v0.1.39 Linux release...')
+    print('Fetching Strata v0.1.39 Linux engine binary...')
     url = 'https://github.com/Niko1221/Strata/releases/download/v0.1.39/strata-linux-x64-cuda12.tar.gz'
-    os.makedirs('strata-bin', exist_ok=True)
-    archive = 'strata_temp.tar.gz'
+    archive = 'strata_engine.tar.gz'
     urllib.request.urlretrieve(url, archive)
     with tarfile.open(archive, 'r:*') as t:
-        t.extractall('strata-bin')
+        t.extractall('Strata-src')
     if os.path.exists(archive): os.remove(archive)
-    print('Strata v0.1.39 binary extracted successfully.')
+    print('Strata C++ engine binary extracted to Strata-src.')
 "''' }
 
-serve = { depends-on = ["dl-model", "dl-strata"], cmd = '''python -c "
+serve = { depends-on = ["dl-strata-repo", "dl-model", "dl-engine"], cmd = '''python -c "
 import os, secrets, subprocess, sys, glob
+
 env_file = '.env'
 key = None
 if os.path.exists(env_file):
@@ -108,27 +123,23 @@ if not key:
     key = secrets.token_hex(16)
     with open(env_file, 'a') as f:
         f.write(f'STRATA_API_KEY={key}\n')
-    print('Generated new STRATA_API_KEY in .env')
-else:
-    print('Loaded STRATA_API_KEY from .env')
 
-model_files = glob.glob('./models/**/*IQ2_XS*00001*.gguf', recursive=True) + glob.glob('./models/**/*IQ2_XS*.gguf', recursive=True)
+model_files = glob.glob('./Strata-src/models/**/IQ2_XS/*00001*.gguf', recursive=True) + glob.glob('./Strata-src/models/**/IQ2_XS/*.gguf', recursive=True)
 if not model_files:
-    sys.exit('Error: No Qwen3.8-Flash-Next IQ2_XS GGUF file found in ./models')
+    sys.exit('Error: No IQ2_XS model file found in Strata-src/models.')
 
-model_path = model_files[0]
-print(f'Starting Strata with model: {model_path}')
+model_path = os.path.abspath(model_files[0])
+os.chdir('Strata-src')
 
 cmd = [
-    './strata-bin/strata',
-    'serve',
+    sys.executable,
+    'serve/server.py',
+    '--engine', './strata',
     '--model', model_path,
     '--parallel', '4',
-    '--layer-split', 'auto',
-    '--cors-origins', '*',
-    '--api-key', key,
     '--host', '0.0.0.0',
-    '--port', '9931'
+    '--port', '9931',
+    '--api-key', key
 ]
 sys.exit(subprocess.call(cmd))
 "''', env = { CUDA_VISIBLE_DEVICES = "0,1" } }
