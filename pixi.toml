@@ -63,7 +63,6 @@ if not os.path.exists(target):
 serve = { depends-on = ["dl-strata-repo", "dl-model", "dl-tokenizer", "dl-engine"], cmd = '''python -c "
 import os, json, secrets, subprocess, sys, glob, shutil
 
-# Preserve/consolidate any shards previously downloaded into Strata-src/models
 if os.path.exists('./Strata-src/models'):
     os.makedirs('./models', exist_ok=True)
     for root, dirs, files in os.walk('./Strata-src/models'):
@@ -118,7 +117,6 @@ strata_cwd = os.path.abspath(r'./Strata-src')
 tokenizer_dir = os.path.abspath(r'./Strata-src/pack/full/tokenizer')
 os.makedirs(tokenizer_dir, exist_ok=True)
 
-# Sanitize merges.txt binary buffer to eliminate trailing empty line crashes
 merges_path = os.path.join(tokenizer_dir, 'merges.txt')
 if os.path.exists(merges_path):
     with open(merges_path, 'rb') as f:
@@ -126,7 +124,6 @@ if os.path.exists(merges_path):
     raw_clean = raw.rstrip(b'\r\n ')
     lines = raw_clean.split(b'\n')
     
-    # Verify valid pair structure; re-fetch from HF if file was previously corrupted
     corrupted = False
     for idx, line in enumerate(lines):
         if idx == 0 and line.startswith(b'#'):
@@ -160,11 +157,12 @@ if not os.path.exists(token_type_path):
 
 engine_args = [
     '--native', shard1_path,
-    '--expert-profile', profile_path,
-    '--remote-expert-opt',
     '--prefill', 'auto',
     '--max-context', '262144'
 ]
+
+if os.path.exists(profile_path):
+    engine_args.extend(['--expert-profile', profile_path, '--remote-expert-opt'])
 
 if shard2_path:
     engine_args.extend(['--ple-gguf', shard2_path])
@@ -330,11 +328,12 @@ if not os.path.exists(token_type_path):
 
 engine_args = [
     '--native', shard1_path,
-    '--expert-profile', profile_path,
-    '--remote-expert-opt',
     '--prefill', 'auto',
     '--max-context', '262144'
 ]
+
+if os.path.exists(profile_path):
+    engine_args.extend(['--expert-profile', profile_path, '--remote-expert-opt'])
 
 if shard2_path:
     engine_args.extend(['--ple-gguf', shard2_path])
