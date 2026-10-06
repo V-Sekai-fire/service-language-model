@@ -2,3 +2,4 @@
 /models/
 /llama-prism
 prism.tar.gz
+/.env
