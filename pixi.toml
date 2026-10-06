@@ -19,6 +19,8 @@ cuda-toolkit = ">=12.4"
 [tasks]
 default = { depends-on = ["serve"] }
 
+benchmark = { cmd = "python benchmark.py", description = "Benchmark a running `pixi run serve` instance (prefill and generation tokens/s)" }
+
 dl-target = "hf download OS-Software/Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-GGUF Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-PQ2_0.gguf --local-dir ./models"
 dl-draft = "hf download incoai/Qwen3.8-27B-DFlash2-GGUF Qwen3.8-27B-DFlash2-Q4_K_M.gguf --local-dir ./models"
 
