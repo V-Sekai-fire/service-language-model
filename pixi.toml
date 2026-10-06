@@ -1,7 +1,7 @@
 [workspace]
 name = "strata-qwen38-flash"
 version = "0.1.39"
-description = "Strata launcher with NVMe SSD durable prefix checkpointing for instant prompt updates"
+description = "Strata v0.1.39 launcher with root models cache preservation and durable SSD prefix caching"
 channels = ["conda-forge", "nvidia"]
 platforms = ["win-64", "linux-64"]
 
@@ -40,7 +40,8 @@ if not os.path.exists('Strata-src'):
     print('Strata v0.1.39 release source extracted to Strata-src.')
 "''' }
 
-dl-model = "hf download ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF --include 'IQ2_XS/*' --local-dir ./Strata-src/models"
+# Points strictly to the project root ./models so existing cached shards are instantly recognized
+dl-model = "hf download ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF --include 'IQ2_XS/*' --local-dir ./models"
 
 [target.win-64.tasks]
 dl-engine = { cmd = '''python -c "
@@ -58,7 +59,21 @@ if not os.path.exists(target):
 "''' }
 
 serve = { depends-on = ["dl-strata-repo", "dl-model", "dl-engine"], cmd = '''python -c "
-import os, secrets, subprocess, sys, glob
+import os, secrets, subprocess, sys, glob, shutil
+
+# Consolidate any shards if they were partially saved under Strata-src/models
+if os.path.exists('./Strata-src/models'):
+    os.makedirs('./models', exist_ok=True)
+    for root, dirs, files in os.walk('./Strata-src/models'):
+        for f in files:
+            if f.endswith('.gguf'):
+                src = os.path.join(root, f)
+                rel = os.path.relpath(src, './Strata-src/models')
+                dst = os.path.join('./models', rel)
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                if not os.path.exists(dst):
+                    print(f'Preserving cached file: moving {f} to ./models')
+                    shutil.move(src, dst)
 
 env_file = '.env'
 key = None
@@ -73,9 +88,14 @@ if not key:
     with open(env_file, 'a') as f:
         f.write(f'STRATA_API_KEY={key}\n')
 
-model_files = glob.glob(r'./Strata-src/models/**/IQ2_XS/*00001*.gguf', recursive=True) + glob.glob(r'./Strata-src/models/**/IQ2_XS/*.gguf', recursive=True)
+model_files = (
+    glob.glob(r'./models/**/IQ2_XS/*00001*.gguf', recursive=True) +
+    glob.glob(r'./models/**/*00001*.gguf', recursive=True) +
+    glob.glob(r'./models/**/*.gguf', recursive=True)
+)
+
 if not model_files:
-    sys.exit('Error: No IQ2_XS model file found in Strata-src/models.')
+    sys.exit('Error: No IQ2_XS model file found in ./models')
 
 model_path = os.path.abspath(model_files[0])
 cache_dir = os.path.abspath(r'./strata_cache')
@@ -118,7 +138,20 @@ if not os.path.exists(target):
 "''' }
 
 serve = { depends-on = ["dl-strata-repo", "dl-model", "dl-engine"], cmd = '''python -c "
-import os, secrets, subprocess, sys, glob
+import os, secrets, subprocess, sys, glob, shutil
+
+if os.path.exists('./Strata-src/models'):
+    os.makedirs('./models', exist_ok=True)
+    for root, dirs, files in os.walk('./Strata-src/models'):
+        for f in files:
+            if f.endswith('.gguf'):
+                src = os.path.join(root, f)
+                rel = os.path.relpath(src, './Strata-src/models')
+                dst = os.path.join('./models', rel)
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                if not os.path.exists(dst):
+                    print(f'Preserving cached file: moving {f} to ./models')
+                    shutil.move(src, dst)
 
 env_file = '.env'
 key = None
@@ -133,9 +166,14 @@ if not key:
     with open(env_file, 'a') as f:
         f.write(f'STRATA_API_KEY={key}\n')
 
-model_files = glob.glob('./Strata-src/models/**/IQ2_XS/*00001*.gguf', recursive=True) + glob.glob('./Strata-src/models/**/IQ2_XS/*.gguf', recursive=True)
+model_files = (
+    glob.glob('./models/**/IQ2_XS/*00001*.gguf', recursive=True) +
+    glob.glob('./models/**/*00001*.gguf', recursive=True) +
+    glob.glob('./models/**/*.gguf', recursive=True)
+)
+
 if not model_files:
-    sys.exit('Error: No IQ2_XS model file found in Strata-src/models.')
+    sys.exit('Error: No IQ2_XS model file found in ./models')
 
 model_path = os.path.abspath(model_files[0])
 cache_dir = os.path.abspath('./strata_cache')

@@ -1,7 +1,8 @@
 /.pixi/
 /models/
 /llama-prism
-/prism.tar.gz
+/*.zip
+/*.gz
 /.env
 /llama-slots/
 /strata-bin/
