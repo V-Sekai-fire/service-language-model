@@ -5,3 +5,5 @@
 /.env
 /llama-slots/
 /llama-prism-src/
+/tray/build/
+/logs/
