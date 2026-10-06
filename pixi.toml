@@ -54,7 +54,7 @@ if os.path.exists(env_file):
     with open(env_file, 'r') as f:
         for line in f:
             if line.strip().startswith('LLAMA_API_KEY='):
-                key = line.strip().split('=', 1)[1].strip().strip('\"').strip('\'')
+                key = line.strip().split('=', 1)[1].strip(' ' + chr(34) + chr(39))
                 break
 if not key:
     key = secrets.token_hex(16)
@@ -112,7 +112,7 @@ if os.path.exists(env_file):
     with open(env_file, 'r') as f:
         for line in f:
             if line.strip().startswith('LLAMA_API_KEY='):
-                key = line.strip().split('=', 1)[1].strip().strip('\"').strip('\'')
+                key = line.strip().split('=', 1)[1].strip(' ' + chr(34) + chr(39))
                 break
 if not key:
     key = secrets.token_hex(16)
@@ -170,7 +170,7 @@ if os.path.exists(env_file):
     with open(env_file, 'r') as f:
         for line in f:
             if line.strip().startswith('LLAMA_API_KEY='):
-                key = line.strip().split('=', 1)[1].strip().strip('\"').strip('\'')
+                key = line.strip().split('=', 1)[1].strip(' ' + chr(34) + chr(39))
                 break
 if not key:
     key = secrets.token_hex(16)
@@ -228,7 +228,7 @@ if os.path.exists(env_file):
     with open(env_file, 'r') as f:
         for line in f:
             if line.strip().startswith('LLAMA_API_KEY='):
-                key = line.strip().split('=', 1)[1].strip().strip('\"').strip('\'')
+                key = line.strip().split('=', 1)[1].strip(' ' + chr(34) + chr(39))
                 break
 if not key:
     key = secrets.token_hex(16)
