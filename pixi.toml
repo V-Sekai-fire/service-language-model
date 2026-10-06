@@ -9,6 +9,7 @@ platforms = ["win-64", "linux-64", "osx-64", "osx-arm64"]
 python = "3.11.*"
 git = "*"
 huggingface_hub = ">=0.28"
+zstd = ">=1.5.7,<2"
 
 [target.win-64.dependencies]
 cuda-toolkit = ">=12.4"
@@ -25,6 +26,7 @@ tray = { depends-on = ["tray-build"], cmd = "tray/build/Release/language-model-t
 
 dl-target = "hf download OS-Software/Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-GGUF Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-PQ2_0.gguf --local-dir ./models"
 dl-draft = "hf download incoai/Qwen3.8-27B-DFlash2-GGUF Qwen3.8-27B-DFlash2-Q4_K_M.gguf --local-dir ./models"
+pack = "python pack.py"
 
 
 [target.win-64.tasks]
