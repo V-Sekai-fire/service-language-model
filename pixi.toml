@@ -106,7 +106,7 @@ os.chdir('Strata-src')
 cmd = [
     sys.executable,
     os.path.join('serve', 'server.py'),
-    '--engine', r'.\strata.exe',
+    '--engine', r'strata',
     '--model', model_path,
     '--parallel', '4',
     '--kv', 'k8v4',
@@ -184,7 +184,7 @@ os.chdir('Strata-src')
 cmd = [
     sys.executable,
     'serve/server.py',
-    '--engine', './strata',
+    '--engine', 'strata',
     '--model', model_path,
     '--parallel', '4',
     '--kv', 'k8v4',
