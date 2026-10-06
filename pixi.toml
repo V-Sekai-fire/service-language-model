@@ -1,9 +1,9 @@
 [workspace]
-name = "bonsai-v2-auto"
-version = "0.5.0"
-description = "Zero-argument single-step launcher for Ternary-Bonsai-2-27B with DFlash2"
+name = "strata-qwen38-flash"
+version = "0.1.39"
+description = "Zero-argument Strata v0.1.39 launcher for Qwen3.8-Flash-Next 2-bit with 4x parallel batching"
 channels = ["conda-forge", "nvidia"]
-platforms = ["win-64", "linux-64", "osx-64", "osx-arm64"]
+platforms = ["win-64", "linux-64"]
 
 [dependencies]
 python = "3.11.*"
@@ -19,225 +19,114 @@ cuda-toolkit = ">=12.4"
 [tasks]
 default = { depends-on = ["serve"] }
 
-dl-target = "hf download OS-Software/Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-GGUF Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-PQ2_0.gguf --local-dir ./models"
-dl-draft = "hf download incoai/Qwen3.8-27B-DFlash2-GGUF Qwen3.8-27B-DFlash2-Q4_K_M.gguf --local-dir ./models"
+# Downloads 2-bit GSQ-RCO IQ2_XS shards for Qwen3.8-Flash-Next
+dl-model = "hf download ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF --include '*IQ2_XS*' --local-dir ./models"
 
 [target.win-64.tasks]
-dl-prism = { cmd = '''python -c "
+dl-strata = { cmd = '''python -c "
 import os, urllib.request, zipfile
-target = 'llama-prism/llama-server.exe'
+target = 'strata-bin/strata.exe'
 if not os.path.exists(target):
-    print('Fetching Prism CUDA 13.3 binary and runtime DLLs...')
-    urls = [
-        'https://github.com/PrismML-Eng/llama.cpp/releases/download/prism-b10754-2459f68/llama-prism-b10754-2459f68-bin-win-cuda-13.3-x64.zip',
-        'https://github.com/PrismML-Eng/llama.cpp/releases/download/prism-b10754-2459f68/cudart-llama-bin-win-cuda-13.3-x64.zip'
-    ]
-    os.makedirs('llama-prism', exist_ok=True)
-    for idx, url in enumerate(urls):
-        zpath = f'prism_temp_{idx}.zip'
-        urllib.request.urlretrieve(url, zpath)
-        with zipfile.ZipFile(zpath, 'r') as z:
-            for item in z.infolist():
-                fname = os.path.basename(item.filename)
-                if fname:
-                    open(os.path.join('llama-prism', fname), 'wb').write(z.open(item).read())
-        if os.path.exists(zpath): os.remove(zpath)
-    print('Extracted Prism binary and CUDA runtime DLLs successfully.')
+    print('Fetching Strata v0.1.39 binary...')
+    url = 'https://github.com/Niko1221/Strata/releases/download/v0.1.39/strata-windows-x64-cuda12.zip'
+    os.makedirs('strata-bin', exist_ok=True)
+    zpath = 'strata_temp.zip'
+    urllib.request.urlretrieve(url, zpath)
+    with zipfile.ZipFile(zpath, 'r') as z:
+        z.extractall('strata-bin')
+    if os.path.exists(zpath): os.remove(zpath)
+    print('Strata v0.1.39 binary extracted successfully.')
 "''' }
 
-serve = { depends-on = ["dl-target", "dl-draft", "dl-prism"], cmd = '''python -c "
-import os, secrets, subprocess, sys
-os.makedirs('llama-slots', exist_ok=True)
+serve = { depends-on = ["dl-model", "dl-strata"], cmd = '''python -c "
+import os, secrets, subprocess, sys, glob
 env_file = '.env'
 key = None
 if os.path.exists(env_file):
     with open(env_file, 'r') as f:
         for line in f:
-            if line.strip().startswith('LLAMA_API_KEY='):
+            if line.strip().startswith('STRATA_API_KEY='):
                 key = line.strip().split('=', 1)[1].strip(' ' + chr(34) + chr(39))
                 break
 if not key:
     key = secrets.token_hex(16)
     with open(env_file, 'a') as f:
-        f.write(f'LLAMA_API_KEY={key}\n')
-    print('Generated new LLAMA_API_KEY in .env')
+        f.write(f'STRATA_API_KEY={key}\n')
+    print('Generated new STRATA_API_KEY in .env')
 else:
-    print('Loaded LLAMA_API_KEY from .env')
+    print('Loaded STRATA_API_KEY from .env')
 
-cmd = [r'.\llama-prism\llama-server.exe', '-m', r'.\models\Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-PQ2_0.gguf', '-md', r'.\models\Qwen3.8-27B-DFlash2-Q4_K_M.gguf', '--spec-type', 'draft-dflash', '--spec-draft-n-max', '7', '--reasoning-preserve', '--slot-save-path', r'.\llama-slots', '--cors-origins', '*', '--api-key', key, '-ngl', '99', '-ngld', '99', '-sm', 'layer', '-c', '256144', '-b', '4096', '-ub', '1024', '-ctk', 'q8_0', '-ctv', 'q8_0', '-t', '8', '-np', '4', '-fa', 'on', '--no-repack', '--repeat-penalty', '1.0', '--temp', '0.65', '--host', '0.0.0.0', '--port', '9931']
+# Locate first shard file
+model_files = glob.glob(r'./models/*IQ2_XS*00001*.gguf') + glob.glob(r'./models/*IQ2_XS*.gguf')
+if not model_files:
+    sys.exit('Error: No Qwen3.8-Flash-Next IQ2_XS GGUF file found in ./models')
+
+model_path = model_files[0]
+
+cmd = [
+    r'.\strata-bin\strata.exe',
+    'serve',
+    '--model', model_path,
+    '--parallel', '4',
+    '--layer-split', 'auto',
+    '--cors-origins', '*',
+    '--api-key', key,
+    '--host', '0.0.0.0',
+    '--port', '9931'
+]
 sys.exit(subprocess.call(cmd))
 "''', env = { CUDA_VISIBLE_DEVICES = "0,1" } }
 
 [target.linux-64.tasks]
-dl-prism = { cmd = '''python -c "
-import json, os, urllib.request, tarfile, zipfile, shutil
-tag = 'prism-b10754-2459f68'
-target = 'llama-prism/llama-server'
+dl-strata = { cmd = '''python -c "
+import os, urllib.request, tarfile
+target = 'strata-bin/strata'
 if not os.path.exists(target):
-    print(f'Fetching prebuilt Prism Linux binary ({tag})...')
-    req = urllib.request.Request(f'https://api.github.com/repos/PrismML-Eng/llama.cpp/releases/tags/{tag}', headers={'User-Agent': 'Mozilla/5.0'})
-    url = None
-    try:
-        assets = json.loads(urllib.request.urlopen(req).read().decode()).get('assets', [])
-        url = next(a['browser_download_url'] for a in assets if any(k in a['name'].lower() for k in ['ubuntu', 'linux']))
-    except Exception:
-        url = f'https://github.com/PrismML-Eng/llama.cpp/releases/download/{tag}/llama-prism-{tag}-bin-ubuntu-x64.tar.gz'
-    archive = 'prism_download.tmp'
+    print('Fetching Strata v0.1.39 Linux release...')
+    url = 'https://github.com/Niko1221/Strata/releases/download/v0.1.39/strata-linux-x64-cuda12.tar.gz'
+    os.makedirs('strata-bin', exist_ok=True)
+    archive = 'strata_temp.tar.gz'
     urllib.request.urlretrieve(url, archive)
-    temp_dir = 'prism_temp_extract'
-    os.makedirs(temp_dir, exist_ok=True)
-    os.makedirs('llama-prism', exist_ok=True)
-    try:
-        with zipfile.ZipFile(archive, 'r') as z: z.extractall(temp_dir)
-    except Exception:
-        with tarfile.open(archive, 'r:*') as t: t.extractall(temp_dir)
-    for root, dirs, files in os.walk(temp_dir):
-        for f in files:
-            src = os.path.join(root, f)
-            dst = os.path.join('llama-prism', f)
-            shutil.move(src, dst)
-            try: os.chmod(dst, 0o755)
-            except Exception: pass
-    shutil.rmtree(temp_dir)
+    with tarfile.open(archive, 'r:*') as t:
+        t.extractall('strata-bin')
     if os.path.exists(archive): os.remove(archive)
-    print('Prebuilt Linux binary extracted successfully.')
+    print('Strata v0.1.39 binary extracted successfully.')
 "''' }
 
-serve = { depends-on = ["dl-target", "dl-draft", "dl-prism"], cmd = '''python -c "
-import os, secrets, subprocess, sys
-os.makedirs('llama-slots', exist_ok=True)
+serve = { depends-on = ["dl-model", "dl-strata"], cmd = '''python -c "
+import os, secrets, subprocess, sys, glob
 env_file = '.env'
 key = None
 if os.path.exists(env_file):
     with open(env_file, 'r') as f:
         for line in f:
-            if line.strip().startswith('LLAMA_API_KEY='):
+            if line.strip().startswith('STRATA_API_KEY='):
                 key = line.strip().split('=', 1)[1].strip(' ' + chr(34) + chr(39))
                 break
 if not key:
     key = secrets.token_hex(16)
     with open(env_file, 'a') as f:
-        f.write(f'LLAMA_API_KEY={key}\n')
-    print('Generated new LLAMA_API_KEY in .env')
+        f.write(f'STRATA_API_KEY={key}\n')
+    print('Generated new STRATA_API_KEY in .env')
 else:
-    print('Loaded LLAMA_API_KEY from .env')
+    print('Loaded STRATA_API_KEY from .env')
 
-cmd = ['./llama-prism/llama-server', '-m', './models/Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-PQ2_0.gguf', '-md', './models/Qwen3.8-27B-DFlash2-Q4_K_M.gguf', '--spec-type', 'draft-dflash', '--spec-draft-n-max', '7', '--reasoning-preserve', '--slot-save-path', './llama-slots', '--cors-origins', '*', '--api-key', key, '-ngl', '99', '-ngld', '99', '-sm', 'layer', '-c', '256144', '-b', '4096', '-ub', '1024', '-ctk', 'q8_0', '-ctv', 'q8_0', '-t', '8', '-np', '4', '-fa', 'on', '--no-repack', '--repeat-penalty', '1.0', '--temp', '0.65', '--host', '0.0.0.0', '--port', '9931']
+model_files = glob.glob('./models/*IQ2_XS*00001*.gguf') + glob.glob('./models/*IQ2_XS*.gguf')
+if not model_files:
+    sys.exit('Error: No Qwen3.8-Flash-Next IQ2_XS GGUF file found in ./models')
+
+model_path = model_files[0]
+
+cmd = [
+    './strata-bin/strata',
+    'serve',
+    '--model', model_path,
+    '--parallel', '4',
+    '--layer-split', 'auto',
+    '--cors-origins', '*',
+    '--api-key', key,
+    '--host', '0.0.0.0',
+    '--port', '9931'
+]
 sys.exit(subprocess.call(cmd))
 "''', env = { CUDA_VISIBLE_DEVICES = "0,1" } }
-
-[target.osx-arm64.tasks]
-dl-prism = { cmd = '''python -c "
-import json, os, urllib.request, tarfile, zipfile, shutil
-tag = 'prism-b10754-2459f68'
-target = 'llama-prism/llama-server'
-if not os.path.exists(target):
-    print(f'Fetching prebuilt Prism macOS Metal binary ({tag})...')
-    req = urllib.request.Request(f'https://api.github.com/repos/PrismML-Eng/llama.cpp/releases/tags/{tag}', headers={'User-Agent': 'Mozilla/5.0'})
-    url = None
-    try:
-        assets = json.loads(urllib.request.urlopen(req).read().decode()).get('assets', [])
-        url = next(a['browser_download_url'] for a in assets if any(k in a['name'].lower() for k in ['mac', 'osx', 'darwin', 'apple']))
-    except Exception:
-        url = f'https://github.com/PrismML-Eng/llama.cpp/releases/download/{tag}/llama-prism-{tag}-bin-macos-arm64.tar.gz'
-    archive = 'prism_download.tmp'
-    urllib.request.urlretrieve(url, archive)
-    temp_dir = 'prism_temp_extract'
-    os.makedirs(temp_dir, exist_ok=True)
-    os.makedirs('llama-prism', exist_ok=True)
-    try:
-        with zipfile.ZipFile(archive, 'r') as z: z.extractall(temp_dir)
-    except Exception:
-        with tarfile.open(archive, 'r:*') as t: t.extractall(temp_dir)
-    for root, dirs, files in os.walk(temp_dir):
-        for f in files:
-            src = os.path.join(root, f)
-            dst = os.path.join('llama-prism', f)
-            shutil.move(src, dst)
-            try: os.chmod(dst, 0o755)
-            except Exception: pass
-    shutil.rmtree(temp_dir)
-    if os.path.exists(archive): os.remove(archive)
-    print('Prebuilt macOS binary extracted successfully.')
-"''' }
-
-serve = { depends-on = ["dl-target", "dl-draft", "dl-prism"], cmd = '''python -c "
-import os, secrets, subprocess, sys
-os.makedirs('llama-slots', exist_ok=True)
-env_file = '.env'
-key = None
-if os.path.exists(env_file):
-    with open(env_file, 'r') as f:
-        for line in f:
-            if line.strip().startswith('LLAMA_API_KEY='):
-                key = line.strip().split('=', 1)[1].strip(' ' + chr(34) + chr(39))
-                break
-if not key:
-    key = secrets.token_hex(16)
-    with open(env_file, 'a') as f:
-        f.write(f'LLAMA_API_KEY={key}\n')
-    print('Generated new LLAMA_API_KEY in .env')
-else:
-    print('Loaded LLAMA_API_KEY from .env')
-
-cmd = ['./llama-prism/llama-server', '-m', './models/Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-PQ2_0.gguf', '-md', './models/Qwen3.8-27B-DFlash2-Q4_K_M.gguf', '--spec-type', 'draft-dflash', '--spec-draft-n-max', '7', '--reasoning-preserve', '--slot-save-path', './llama-slots', '--cors-origins', '*', '--api-key', key, '-ngl', '99', '-ngld', '99', '-sm', 'layer', '-c', '256144', '-b', '4096', '-ub', '1024', '-ctk', 'q8_0', '-ctv', 'q8_0', '-t', '8', '-np', '4', '-fa', 'on', '--no-repack', '--repeat-penalty', '1.0', '--temp', '0.65', '--host', '0.0.0.0', '--port', '9931']
-sys.exit(subprocess.call(cmd))
-"''' }
-
-[target.osx-64.tasks]
-dl-prism = { cmd = '''python -c "
-import json, os, urllib.request, tarfile, zipfile, shutil
-tag = 'prism-b10754-2459f68'
-target = 'llama-prism/llama-server'
-if not os.path.exists(target):
-    print(f'Fetching prebuilt Prism macOS x64 binary ({tag})...')
-    req = urllib.request.Request(f'https://api.github.com/repos/PrismML-Eng/llama.cpp/releases/tags/{tag}', headers={'User-Agent': 'Mozilla/5.0'})
-    url = None
-    try:
-        assets = json.loads(urllib.request.urlopen(req).read().decode()).get('assets', [])
-        url = next(a['browser_download_url'] for a in assets if any(k in a['name'].lower() for k in ['mac', 'osx', 'darwin', 'apple']))
-    except Exception:
-        url = f'https://github.com/PrismML-Eng/llama.cpp/releases/download/{tag}/llama-prism-{tag}-bin-macos-x64.tar.gz'
-    archive = 'prism_download.tmp'
-    urllib.request.urlretrieve(url, archive)
-    temp_dir = 'prism_temp_extract'
-    os.makedirs(temp_dir, exist_ok=True)
-    os.makedirs('llama-prism', exist_ok=True)
-    try:
-        with zipfile.ZipFile(archive, 'r') as z: z.extractall(temp_dir)
-    except Exception:
-        with tarfile.open(archive, 'r:*') as t: t.extractall(temp_dir)
-    for root, dirs, files in os.walk(temp_dir):
-        for f in files:
-            src = os.path.join(root, f)
-            dst = os.path.join('llama-prism', f)
-            shutil.move(src, dst)
-            try: os.chmod(dst, 0o755)
-            except Exception: pass
-    shutil.rmtree(temp_dir)
-    if os.path.exists(archive): os.remove(archive)
-    print('Prebuilt macOS binary extracted successfully.')
-"''' }
-
-serve = { depends-on = ["dl-target", "dl-draft", "dl-prism"], cmd = '''python -c "
-import os, secrets, subprocess, sys
-os.makedirs('llama-slots', exist_ok=True)
-env_file = '.env'
-key = None
-if os.path.exists(env_file):
-    with open(env_file, 'r') as f:
-        for line in f:
-            if line.strip().startswith('LLAMA_API_KEY='):
-                key = line.strip().split('=', 1)[1].strip(' ' + chr(34) + chr(39))
-                break
-if not key:
-    key = secrets.token_hex(16)
-    with open(env_file, 'a') as f:
-        f.write(f'LLAMA_API_KEY={key}\n')
-    print('Generated new LLAMA_API_KEY in .env')
-else:
-    print('Loaded LLAMA_API_KEY from .env')
-
-cmd = ['./llama-prism/llama-server', '-m', './models/Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-PQ2_0.gguf', '-md', './models/Qwen3.8-27B-DFlash2-Q4_K_M.gguf', '--spec-type', 'draft-dflash', '--spec-draft-n-max', '7', '--reasoning-preserve', '--slot-save-path', './llama-slots', '--cors-origins', '*', '--api-key', key, '-ngl', '99', '-ngld', '99', '-sm', 'layer', '-c', '256144', '-b', '4096', '-ub', '1024', '-ctk', 'q8_0', '-ctv', 'q8_0', '-t', '8', '-np', '4', '-fa', 'on', '--no-repack', '--repeat-penalty', '1.0', '--temp', '0.65', '--host', '0.0.0.0', '--port', '9931']
-sys.exit(subprocess.call(cmd))
-"''' }
