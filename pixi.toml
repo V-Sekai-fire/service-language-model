@@ -19,8 +19,8 @@ cuda-toolkit = ">=12.4"
 [tasks]
 default = { depends-on = ["serve"] }
 
-# Downloads 2-bit GSQ-RCO IQ2_XS shards for Qwen3.8-Flash-Next
-dl-model = "hf download ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF --include '*IQ2_XS*' --local-dir ./models"
+# Downloads 2-bit GSQ-RCO IQ2_XS subfolder shards for Qwen3.8-Flash-Next
+dl-model = "hf download ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF --include 'IQ2_XS/*' --local-dir ./models"
 
 [target.win-64.tasks]
 dl-strata = { cmd = '''python -c "
@@ -56,12 +56,13 @@ if not key:
 else:
     print('Loaded STRATA_API_KEY from .env')
 
-# Locate first shard file
-model_files = glob.glob(r'./models/*IQ2_XS*00001*.gguf') + glob.glob(r'./models/*IQ2_XS*.gguf')
+# Search recursively for shard 1 or direct GGUF file inside nested directories
+model_files = glob.glob(r'./models/**/*IQ2_XS*00001*.gguf', recursive=True) + glob.glob(r'./models/**/*IQ2_XS*.gguf', recursive=True)
 if not model_files:
     sys.exit('Error: No Qwen3.8-Flash-Next IQ2_XS GGUF file found in ./models')
 
 model_path = model_files[0]
+print(f'Starting Strata with model: {model_path}')
 
 cmd = [
     r'.\strata-bin\strata.exe',
@@ -111,11 +112,12 @@ if not key:
 else:
     print('Loaded STRATA_API_KEY from .env')
 
-model_files = glob.glob('./models/*IQ2_XS*00001*.gguf') + glob.glob('./models/*IQ2_XS*.gguf')
+model_files = glob.glob('./models/**/*IQ2_XS*00001*.gguf', recursive=True) + glob.glob('./models/**/*IQ2_XS*.gguf', recursive=True)
 if not model_files:
     sys.exit('Error: No Qwen3.8-Flash-Next IQ2_XS GGUF file found in ./models')
 
 model_path = model_files[0]
+print(f'Starting Strata with model: {model_path}')
 
 cmd = [
     './strata-bin/strata',
