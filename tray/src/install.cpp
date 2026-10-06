@@ -1,10 +1,9 @@
 ﻿// Downloads release .zst assets (or reads a local folder) and restores them. No pixi, python or zstd.exe needed.
 // Usage: language-model-install [--from <dir>] [--tag <tag>] [--repo <owner/name>]
-#include <windows.h>
-#include <winhttp.h>
 #include <zstd.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -13,8 +12,19 @@
 #include <string>
 #include <vector>
 
+#ifdef _WIN32
+#include <windows.h>
+#include <winhttp.h>
+#else
+#include <spawn.h>
+#include <sys/wait.h>
+#include <unistd.h>
+extern char** environ;
+#endif
+
 namespace fs = std::filesystem;
 
+#ifdef _WIN32
 static std::wstring widen(const std::string& s) {
     int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0);
     std::wstring w(n, 0);
@@ -22,9 +32,11 @@ static std::wstring widen(const std::string& s) {
     w.resize(n - 1);
     return w;
 }
+#endif
 
-// Streams an https URL into a sink; follows redirects (WinHTTP default).
+// Streams an https URL into a sink; follows redirects.
 template <class Sink> static bool httpGet(const std::string& url, Sink sink) {
+#ifdef _WIN32
     URL_COMPONENTS uc{};
     uc.dwStructSize = sizeof(uc);
     wchar_t host[256], path[4096];
@@ -41,9 +53,63 @@ template <class Sink> static bool httpGet(const std::string& url, Sink sink) {
     ok = ok && code == 200;
     std::vector<char> buf(1 << 20);
     DWORD got;
-    while (ok && WinHttpReadData(r, buf.data(), (DWORD)buf.size(), &got) && got) sink(buf.data(), got);
+    while (ok && WinHttpReadData(r, buf.data(), (DWORD)buf.size(), &got) && got)
+        sink(buf.data(), static_cast<size_t>(got));
     WinHttpCloseHandle(r); WinHttpCloseHandle(c); WinHttpCloseHandle(s);
     return ok;
+#else
+    int pipefd[2];
+    if (pipe(pipefd) != 0)
+        return false;
+
+    posix_spawn_file_actions_t actions;
+    if (posix_spawn_file_actions_init(&actions) != 0) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        return false;
+    }
+    posix_spawn_file_actions_adddup2(&actions, pipefd[1], STDOUT_FILENO);
+    posix_spawn_file_actions_addclose(&actions, pipefd[0]);
+    posix_spawn_file_actions_addclose(&actions, pipefd[1]);
+
+    pid_t child = -1;
+    char curl[] = "curl";
+    char fail[] = "--fail";
+    char location[] = "--location";
+    char silent[] = "--silent";
+    char showError[] = "--show-error";
+    char userAgent[] = "--user-agent";
+    char userAgentValue[] = "language-model-install";
+    char accept[] = "--header";
+    char acceptValue[] = "Accept: application/vnd.github+json";
+    char* const argv[] = {curl, fail, location, silent, showError, userAgent,
+                          userAgentValue, accept, acceptValue, const_cast<char*>(url.c_str()), nullptr};
+    int spawnResult = posix_spawnp(&child, curl, &actions, nullptr, argv, environ);
+    posix_spawn_file_actions_destroy(&actions);
+    close(pipefd[1]);
+    if (spawnResult != 0) {
+        close(pipefd[0]);
+        return false;
+    }
+
+    bool ok = true;
+    std::vector<char> buf(1 << 16);
+    ssize_t got;
+    while ((got = read(pipefd[0], buf.data(), buf.size())) > 0)
+        sink(buf.data(), static_cast<size_t>(got));
+    if (got < 0)
+        ok = false;
+    close(pipefd[0]);
+
+    int status = 0;
+    while (waitpid(child, &status, 0) < 0) {
+        if (errno != EINTR) {
+            ok = false;
+            break;
+        }
+    }
+    return ok && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+#endif
 }
 
 static bool decompressInto(const fs::path& zst, std::ofstream& out) {
@@ -74,7 +140,7 @@ int main(int argc, char** argv) {
         from = "dist";
         fs::create_directories(from);
         std::string json;
-        if (!httpGet("https://api.github.com/repos/" + repo + "/releases/tags/" + tag, [&](const char* p, DWORD n) { json.append(p, n); })) {
+        if (!httpGet("https://api.github.com/repos/" + repo + "/releases/tags/" + tag, [&](const char* p, size_t n) { json.append(p, n); })) {
             std::fprintf(stderr, "cannot fetch release %s\n", tag.c_str());
             return 1;
         }
@@ -83,7 +149,7 @@ int main(int argc, char** argv) {
             std::string url = (*it)[1], name = url.substr(url.rfind('/') + 1);
             std::printf("download %s\n", name.c_str());
             std::ofstream f(fs::path(from) / name, std::ios::binary);
-            if (!httpGet(url, [&](const char* p, DWORD n) { f.write(p, n); })) { std::fprintf(stderr, "failed: %s\n", name.c_str()); return 1; }
+            if (!httpGet(url, [&](const char* p, size_t n) { f.write(p, n); })) { std::fprintf(stderr, "failed: %s\n", name.c_str()); return 1; }
         }
     }
     std::regex zre(R"((.+)\.zst(\.\d{3})?$)");

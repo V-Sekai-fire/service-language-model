@@ -23,6 +23,7 @@ default = { depends-on = ["serve"] }
 benchmark = { cmd = "python benchmark.py", description = "Benchmark a running `pixi run serve` instance (prefill and generation tokens/s)" }
 tray-build = { cmd = "cmake -S tray -B tray/build && cmake --build tray/build --config Release", description = "Build the language-model tray (SDL3, MSVC)" }
 tray = { depends-on = ["tray-build"], cmd = "tray/build/Release/language-model-tray.exe", description = "Tray icon that starts and keeps `pixi run serve` online" }
+installer-build = { cmd = "cmake -S tray -B tray/build && cmake --build tray/build --target language-model-install --config Release", description = "Build the release asset installer" }
 
 dl-target = "hf download OS-Software/Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-GGUF Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-PQ2_0.gguf --local-dir ./models"
 dl-draft = "hf download incoai/Qwen3.8-27B-DFlash2-GGUF Qwen3.8-27B-DFlash2-Q4_K_M.gguf --local-dir ./models"
@@ -135,6 +136,7 @@ sys.exit(subprocess.call(cmd))
 "''', env = { CUDA_VISIBLE_DEVICES = "0,1" } }
 
 [target.osx-arm64.tasks]
+install-release = { depends-on = ["installer-build"], cmd = "tray/build/language-model-install", description = "Download and install the release assets" }
 dl-prism = { cmd = '''python -c "
 import json, os, urllib.request, tarfile, zipfile, shutil
 tag = 'prism-b10754-2459f68'
@@ -188,11 +190,12 @@ if not key:
 else:
     print('Loaded LLAMA_API_KEY from .env')
 
-cmd = ['./llama-prism/llama-server', '-m', './models/Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-PQ2_0.gguf', '-md', './models/Qwen3.8-27B-DFlash2-Q4_K_M.gguf', '--spec-type', 'draft-dflash', '--spec-draft-n-max', '7', '--reasoning-preserve', '--slot-save-path', './llama-slots', '--cors-origins', '*', '--api-key', key, '-ngl', '99', '-ngld', '99', '-sm', 'layer', '-c', '256144', '-b', '4096', '-ub', '1024', '-ctk', 'q8_0', '-ctv', 'q8_0', '-t', '8', '-np', '4', '-fa', 'on', '--no-repack', '--repeat-penalty', '1.0', '--temp', '0.65', '--host', '0.0.0.0', '--port', '9931']
+cmd = ['./llama-prism/llama-server', '-m', './models/Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-PQ2_0.gguf', '-md', './models/Qwen3.8-27B-DFlash2-Q4_K_M.gguf', '--spec-type', 'draft-dflash', '--spec-draft-n-max', '7', '--reasoning-preserve', '--slot-save-path', './llama-slots', '--cors-origins', '*', '--api-key', key, '-ngl', '99', '-ngld', '99', '-sm', 'layer', '-c', '256144', '-b', '4096', '-ub', '1024', '-ctk', 'q8_0', '-ctv', 'q8_0', '-t', '6', '-np', '4', '-fa', 'on', '--no-repack', '--repeat-penalty', '1.0', '--temp', '0.65', '--host', '0.0.0.0', '--port', '9931']
 sys.exit(subprocess.call(cmd))
 "''' }
 
 [target.osx-64.tasks]
+install-release = { depends-on = ["installer-build"], cmd = "tray/build/language-model-install", description = "Download and install the release assets" }
 dl-prism = { cmd = '''python -c "
 import json, os, urllib.request, tarfile, zipfile, shutil
 tag = 'prism-b10754-2459f68'
