@@ -1,7 +1,7 @@
 [workspace]
 name = "strata-qwen38-flash"
 version = "0.1.39"
-description = "Zero-argument launcher for Strata v0.1.39 with dual 3090+4090 GPUs, durable caching, and auto-repaired BPE tokenizer"
+description = "Zero-argument launcher for Strata v0.1.39 with RTX 3090 support, optional extra GPUs, durable caching, and auto-repaired BPE tokenizer"
 channels = ["conda-forge", "nvidia"]
 platforms = ["win-64", "linux-64"]
 
@@ -13,12 +13,16 @@ huggingface_hub = ">=0.28"
 fastapi = "*"
 uvicorn = "*"
 requests = "*"
+numpy = ">=1.24"
+
+[pypi-dependencies]
+gguf = ">=0.13"
 
 [target.win-64.dependencies]
-cuda-toolkit = ">=12.4"
+cuda-toolkit = ">=12.4,<13"
 
 [target.linux-64.dependencies]
-cuda-toolkit = ">=12.4"
+cuda-toolkit = ">=12.4,<13"
 
 [tasks]
 default = { depends-on = ["serve"] }
@@ -43,7 +47,26 @@ if not os.path.exists('Strata-src'):
 
 dl-model = "hf download ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF --include 'IQ2_XS/*' --local-dir ./models"
 
-dl-tokenizer = "hf download Qwen/Qwen3.8-27B --include 'vocab.json' --include 'merges.txt' --include 'tokenizer.json' --include 'tokenizer_config.json' --local-dir ./Strata-src/pack/full/tokenizer"
+dl-tokenizer = { depends-on = ["dl-strata-repo", "dl-model"], cmd = "python ./Strata-src/tools/strata_tokenizer.py --gguf ./models/IQ2_XS/Qwen3.8-Flash-Next-GSQ-RCO-IQ2_XS-00001-of-00002.gguf --out ./Strata-src/pack/full" }
+
+pack-model = { depends-on = ["dl-model", "dl-tokenizer"], cmd = "python ./Strata-src/tools/iq_pack.py --gguf ./models/IQ2_XS/Qwen3.8-Flash-Next-GSQ-RCO-IQ2_XS-00001-of-00002.gguf --out ./Strata-src/pack/full" }
+
+mtp-fetch = { depends-on = ["dl-strata-repo"], cmd = "python ./Strata-src/tools/mtp_fetch.py fetch --out ./mtp" }
+
+prepare-mtp = { depends-on = ["mtp-fetch"], cmd = '''python -c "
+import os, site, subprocess, sys
+
+env = dict(os.environ, STRATA_GGUF_PY=site.getsitepackages()[0])
+gguf = os.path.abspath('./mtp/mtp-q2_0.gguf')
+runtime = os.path.abspath('./mtp/rt')
+
+if not os.path.exists(gguf):
+    subprocess.run([sys.executable, './Strata-src/tools/mtp_pack.py', '--src', './mtp',
+                    '--experts', 'q2_0', '--out', gguf], check=True, env=env)
+if not os.path.exists(os.path.join(runtime, 'experts.bin')):
+    subprocess.run([sys.executable, './Strata-src/tools/mtp_rt.py', '--gguf', gguf,
+                    '--out', runtime], check=True, env=env)
+"''' }
 
 [target.win-64.tasks]
 dl-engine = { cmd = '''python -c "
@@ -58,10 +81,12 @@ if not os.path.exists(target):
         z.extractall('Strata-src')
     if os.path.exists(zpath): os.remove(zpath)
     print('Strata C++ engine binary extracted to Strata-src.')
-"''' }
+"''', depends-on = ["dl-strata-repo"] }
 
-serve = { depends-on = ["dl-strata-repo", "dl-model", "dl-tokenizer", "dl-engine"], cmd = '''python -c "
+serve = { depends-on = ["pack-model", "prepare-mtp", "dl-engine"], cmd = '''python -c "
 import os, json, secrets, subprocess, sys, glob, shutil
+
+os.environ.setdefault('CUDA_VISIBLE_DEVICES', '0')
 
 if os.path.exists('./Strata-src/models'):
     os.makedirs('./models', exist_ok=True)
@@ -114,6 +139,7 @@ os.makedirs(cache_dir, exist_ok=True)
 
 strata_exe = os.path.abspath(r'./Strata-src/strata.exe')
 strata_cwd = os.path.abspath(r'./Strata-src')
+pack_dir = os.path.abspath(r'./Strata-src/pack/full')
 tokenizer_dir = os.path.abspath(r'./Strata-src/pack/full/tokenizer')
 os.makedirs(tokenizer_dir, exist_ok=True)
 
@@ -156,10 +182,17 @@ if not os.path.exists(token_type_path):
         print('Created fallback token_type.json in tokenizer folder')
 
 engine_args = [
+    '--pack', pack_dir,
     '--native', shard1_path,
+    '--expert-cache', 'auto',
     '--prefill', 'auto',
+    '--spec', '4',
+    '--spec-min-p', '0.5',
+    '--mtp', os.path.abspath('./mtp/rt'),
     '--max-context', '262144'
 ]
+
+engine_args.extend(['--kv', 'int8', '--kv-resident', '32768'])
 
 if os.path.exists(profile_path):
     engine_args.extend(['--expert-profile', profile_path, '--remote-expert-opt'])
@@ -173,6 +206,7 @@ config_data = {
     'exe': strata_exe,
     'cwd': strata_cwd,
     'args': engine_args,
+    'pack': pack_dir,
     'parallel': 4,
     'port': 9932,
     'host': '0.0.0.0',
@@ -214,7 +248,7 @@ if res != 0:
         print('No log files found in Strata-src.')
 
 sys.exit(res)
-"''', env = { CUDA_VISIBLE_DEVICES = "0,1", STRATA_PF_FUSED = "1" } }
+"''', env = { STRATA_PF_FUSED = "1" } }
 
 [target.linux-64.tasks]
 dl-engine = { cmd = '''python -c "
@@ -229,10 +263,12 @@ if not os.path.exists(target):
         t.extractall('Strata-src')
     if os.path.exists(archive): os.remove(archive)
     print('Strata C++ engine binary extracted to Strata-src.')
-"''' }
+"''', depends-on = ["dl-strata-repo"] }
 
-serve = { depends-on = ["dl-strata-repo", "dl-model", "dl-tokenizer", "dl-engine"], cmd = '''python -c "
+serve = { depends-on = ["pack-model", "prepare-mtp", "dl-engine"], cmd = '''python -c "
 import os, json, secrets, subprocess, sys, glob, shutil
+
+os.environ.setdefault('CUDA_VISIBLE_DEVICES', '0')
 
 if os.path.exists('./Strata-src/models'):
     os.makedirs('./models', exist_ok=True)
@@ -285,6 +321,7 @@ os.makedirs(cache_dir, exist_ok=True)
 
 strata_exe = os.path.abspath('./Strata-src/strata')
 strata_cwd = os.path.abspath('./Strata-src')
+pack_dir = os.path.abspath('./Strata-src/pack/full')
 tokenizer_dir = os.path.abspath('./Strata-src/pack/full/tokenizer')
 os.makedirs(tokenizer_dir, exist_ok=True)
 
@@ -327,10 +364,17 @@ if not os.path.exists(token_type_path):
         print('Created fallback token_type.json in tokenizer folder')
 
 engine_args = [
+    '--pack', pack_dir,
     '--native', shard1_path,
+    '--expert-cache', 'auto',
     '--prefill', 'auto',
+    '--spec', '4',
+    '--spec-min-p', '0.5',
+    '--mtp', os.path.abspath('./mtp/rt'),
     '--max-context', '262144'
 ]
+
+engine_args.extend(['--kv', 'int8', '--kv-resident', '32768'])
 
 if os.path.exists(profile_path):
     engine_args.extend(['--expert-profile', profile_path, '--remote-expert-opt'])
@@ -344,6 +388,7 @@ config_data = {
     'exe': strata_exe,
     'cwd': strata_cwd,
     'args': engine_args,
+    'pack': pack_dir,
     'parallel': 4,
     'port': 9932,
     'host': '0.0.0.0',
@@ -385,4 +430,4 @@ if res != 0:
         print('No log files found in Strata-src.')
 
 sys.exit(res)
-"''', env = { CUDA_VISIBLE_DEVICES = "0,1", STRATA_PF_FUSED = "1" } }
+"''', env = { STRATA_PF_FUSED = "1" } }
