@@ -174,7 +174,7 @@ config_data = {
     'cwd': strata_cwd,
     'args': engine_args,
     'parallel': 4,
-    'port': 9931,
+    'port': 9932,
     'host': '0.0.0.0',
     'api_key': key,
     'tokenizer': tokenizer_dir,
@@ -196,7 +196,7 @@ cmd = [
     '--config', config_path,
     '--tokenizer', tokenizer_dir,
     '--host', '0.0.0.0',
-    '--port', '9931',
+    '--port', '9932',
     '--api-key', key
 ]
 
@@ -345,7 +345,7 @@ config_data = {
     'cwd': strata_cwd,
     'args': engine_args,
     'parallel': 4,
-    'port': 9931,
+    'port': 9932,
     'host': '0.0.0.0',
     'api_key': key,
     'tokenizer': tokenizer_dir,
@@ -367,7 +367,7 @@ cmd = [
     '--config', config_path,
     '--tokenizer', tokenizer_dir,
     '--host', '0.0.0.0',
-    '--port', '9931',
+    '--port', '9932',
     '--api-key', key
 ]
 
