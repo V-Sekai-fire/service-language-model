@@ -27,6 +27,7 @@ tray = { depends-on = ["tray-build"], cmd = "tray/build/Release/language-model-t
 dl-target = "hf download OS-Software/Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-GGUF Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-PQ2_0.gguf --local-dir ./models"
 dl-draft = "hf download incoai/Qwen3.8-27B-DFlash2-GGUF Qwen3.8-27B-DFlash2-Q4_K_M.gguf --local-dir ./models"
 pack = "python pack.py"
+unpack = "python pack.py -d"
 
 
 [target.win-64.tasks]
