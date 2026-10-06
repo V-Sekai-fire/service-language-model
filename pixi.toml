@@ -1,7 +1,7 @@
 [workspace]
 name = "strata-qwen38-flash"
 version = "0.1.39"
-description = "Zero-argument launcher for Strata v0.1.39 pinned release with dual 3090+4090 GPUs"
+description = "Strata launcher with NVMe SSD durable prefix checkpointing for instant prompt updates"
 channels = ["conda-forge", "nvidia"]
 platforms = ["win-64", "linux-64"]
 
@@ -78,6 +78,9 @@ if not model_files:
     sys.exit('Error: No IQ2_XS model file found in Strata-src/models.')
 
 model_path = os.path.abspath(model_files[0])
+cache_dir = os.path.abspath(r'./strata_cache')
+profile_path = os.path.abspath(r'./expert_profile.bin')
+os.makedirs(cache_dir, exist_ok=True)
 os.chdir('Strata-src')
 
 cmd = [
@@ -86,12 +89,18 @@ cmd = [
     '--engine', r'.\strata.exe',
     '--model', model_path,
     '--parallel', '4',
+    '--kv', 'k8v4',
+    '--prompt-cache', '8',
+    '--prompt-cache-every', '2048',
+    '--prompt-cache-dir', cache_dir,
+    '--conversation-cache-mib', '8192',
+    '--expert-profile-save', profile_path,
     '--host', '0.0.0.0',
     '--port', '9931',
     '--api-key', key
 ]
 sys.exit(subprocess.call(cmd))
-"''', env = { CUDA_VISIBLE_DEVICES = "0,1" } }
+"''', env = { CUDA_VISIBLE_DEVICES = "0,1", STRATA_PF_FUSED = "1" } }
 
 [target.linux-64.tasks]
 dl-engine = { cmd = '''python -c "
@@ -129,6 +138,9 @@ if not model_files:
     sys.exit('Error: No IQ2_XS model file found in Strata-src/models.')
 
 model_path = os.path.abspath(model_files[0])
+cache_dir = os.path.abspath('./strata_cache')
+profile_path = os.path.abspath('./expert_profile.bin')
+os.makedirs(cache_dir, exist_ok=True)
 os.chdir('Strata-src')
 
 cmd = [
@@ -137,9 +149,15 @@ cmd = [
     '--engine', './strata',
     '--model', model_path,
     '--parallel', '4',
+    '--kv', 'k8v4',
+    '--prompt-cache', '8',
+    '--prompt-cache-every', '2048',
+    '--prompt-cache-dir', cache_dir,
+    '--conversation-cache-mib', '8192',
+    '--expert-profile-save', profile_path,
     '--host', '0.0.0.0',
     '--port', '9931',
     '--api-key', key
 ]
 sys.exit(subprocess.call(cmd))
-"''', env = { CUDA_VISIBLE_DEVICES = "0,1" } }
+"''', env = { CUDA_VISIBLE_DEVICES = "0,1", STRATA_PF_FUSED = "1" } }
