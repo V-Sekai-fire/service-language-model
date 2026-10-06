@@ -3,13 +3,18 @@ name = "bonsai-v2-auto"
 version = "0.5.0"
 description = "Zero-argument single-step launcher for Ternary-Bonsai-2-27B with DFlash2"
 channels = ["conda-forge", "nvidia"]
-platforms = ["win-64", "linux-64"]
+platforms = ["win-64", "linux-64", "osx-64", "osx-arm64"]
 
 [dependencies]
 python = "3.11.*"
-cuda-toolkit = ">=12.4"
 git = "*"
 huggingface_hub = ">=0.28"
+
+[target.win-64.dependencies]
+cuda-toolkit = ">=12.4"
+
+[target.linux-64.dependencies]
+cuda-toolkit = ">=12.4"
 
 [tasks]
 default = { depends-on = ["serve"] }
@@ -43,6 +48,112 @@ if not os.path.exists(target):
 serve = { depends-on = ["dl-target", "dl-draft", "dl-prism"], cmd = ".\\llama-prism\\llama-server.exe -m .\\models\\Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-PQ2_0.gguf -md .\\models\\Qwen3.8-27B-DFlash2-Q4_K_M.gguf --spec-type draft-dflash --spec-draft-n-max 3 -ngl 99 -ngld 99 -sm layer -c 256144 -ctk q4_0 -ctv q4_0 -np 1 -fa on --no-repack --repeat-penalty 1.0 --temp 0.65 --host 127.0.0.1 --port 8080", env = { CUDA_VISIBLE_DEVICES = "0,1" } }
 
 [target.linux-64.tasks]
-dl-prism = { cmd = "python -c \"import json, os, urllib.request, tarfile; tag='prism-b10754-2459f68'; target='llama-prism/llama-server'; (os.path.exists(target) or (print(f'Fetching prebuilt Prism CUDA binary ({tag})...'), urllib.request.urlretrieve(next((a['browser_download_url'] for a in json.loads(urllib.request.urlopen(urllib.request.Request(f'https://api.github.com/repos/PrismML-Eng/llama.cpp/releases/tags/{tag}', headers={'User-Agent': 'Mozilla/5.0'})).read().decode()).get('assets', []) if 'ubuntu' in a['name'].lower() or 'linux' in a['name'].lower()), f'https://github.com/PrismML-Eng/llama.cpp/releases/download/{tag}/llama-prism-{tag}-bin-ubuntu-x64.tar.gz'), 'prism.tar.gz'), os.makedirs('llama-prism', exist_ok=True), tarfile.open('prism.tar.gz').extractall('llama-prism'), print('Prebuilt binary extracted successfully.')))\"" }
+dl-prism = { cmd = '''python -c "
+import json, os, urllib.request, tarfile, zipfile, shutil
+tag = 'prism-b10754-2459f68'
+target = 'llama-prism/llama-server'
+if not os.path.exists(target):
+    print(f'Fetching prebuilt Prism Linux binary ({tag})...')
+    req = urllib.request.Request(f'https://api.github.com/repos/PrismML-Eng/llama.cpp/releases/tags/{tag}', headers={'User-Agent': 'Mozilla/5.0'})
+    url = None
+    try:
+        assets = json.loads(urllib.request.urlopen(req).read().decode()).get('assets', [])
+        url = next(a['browser_download_url'] for a in assets if any(k in a['name'].lower() for k in ['ubuntu', 'linux']))
+    except Exception:
+        url = f'https://github.com/PrismML-Eng/llama.cpp/releases/download/{tag}/llama-prism-{tag}-bin-ubuntu-x64.tar.gz'
+    archive = 'prism_download.tmp'
+    urllib.request.urlretrieve(url, archive)
+    temp_dir = 'prism_temp_extract'
+    os.makedirs(temp_dir, exist_ok=True)
+    os.makedirs('llama-prism', exist_ok=True)
+    try:
+        with zipfile.ZipFile(archive, 'r') as z: z.extractall(temp_dir)
+    except Exception:
+        with tarfile.open(archive, 'r:*') as t: t.extractall(temp_dir)
+    for root, dirs, files in os.walk(temp_dir):
+        for f in files:
+            src = os.path.join(root, f)
+            dst = os.path.join('llama-prism', f)
+            shutil.move(src, dst)
+            try: os.chmod(dst, 0o755)
+            except Exception: pass
+    shutil.rmtree(temp_dir)
+    if os.path.exists(archive): os.remove(archive)
+    print('Prebuilt Linux binary extracted successfully.')
+"''' }
 
 serve = { depends-on = ["dl-target", "dl-draft", "dl-prism"], cmd = "./llama-prism/llama-server -m ./models/Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-PQ2_0.gguf -md ./models/Qwen3.8-27B-DFlash2-Q4_K_M.gguf --spec-type draft-dflash --spec-draft-n-max 3 -ngl 99 -ngld 99 -sm layer -c 256144 -ctk q4_0 -ctv q4_0 -np 1 -fa on --no-repack --repeat-penalty 1.0 --temp 0.65 --host 127.0.0.1 --port 8080", env = { CUDA_VISIBLE_DEVICES = "0,1" } }
+
+[target.osx-arm64.tasks]
+dl-prism = { cmd = '''python -c "
+import json, os, urllib.request, tarfile, zipfile, shutil
+tag = 'prism-b10754-2459f68'
+target = 'llama-prism/llama-server'
+if not os.path.exists(target):
+    print(f'Fetching prebuilt Prism macOS Metal binary ({tag})...')
+    req = urllib.request.Request(f'https://api.github.com/repos/PrismML-Eng/llama.cpp/releases/tags/{tag}', headers={'User-Agent': 'Mozilla/5.0'})
+    url = None
+    try:
+        assets = json.loads(urllib.request.urlopen(req).read().decode()).get('assets', [])
+        url = next(a['browser_download_url'] for a in assets if any(k in a['name'].lower() for k in ['mac', 'osx', 'darwin', 'apple']))
+    except Exception:
+        url = f'https://github.com/PrismML-Eng/llama.cpp/releases/download/{tag}/llama-prism-{tag}-bin-macos-arm64.tar.gz'
+    archive = 'prism_download.tmp'
+    urllib.request.urlretrieve(url, archive)
+    temp_dir = 'prism_temp_extract'
+    os.makedirs(temp_dir, exist_ok=True)
+    os.makedirs('llama-prism', exist_ok=True)
+    try:
+        with zipfile.ZipFile(archive, 'r') as z: z.extractall(temp_dir)
+    except Exception:
+        with tarfile.open(archive, 'r:*') as t: t.extractall(temp_dir)
+    for root, dirs, files in os.walk(temp_dir):
+        for f in files:
+            src = os.path.join(root, f)
+            dst = os.path.join('llama-prism', f)
+            shutil.move(src, dst)
+            try: os.chmod(dst, 0o755)
+            except Exception: pass
+    shutil.rmtree(temp_dir)
+    if os.path.exists(archive): os.remove(archive)
+    print('Prebuilt macOS binary extracted successfully.')
+"''' }
+
+serve = { depends-on = ["dl-target", "dl-draft", "dl-prism"], cmd = "./llama-prism/llama-server -m ./models/Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-PQ2_0.gguf -md ./models/Qwen3.8-27B-DFlash2-Q4_K_M.gguf --spec-type draft-dflash --spec-draft-n-max 3 -ngl 99 -ngld 99 -sm layer -c 256144 -ctk q4_0 -ctv q4_0 -np 1 -fa on --no-repack --repeat-penalty 1.0 --temp 0.65 --host 127.0.0.1 --port 8080" }
+
+[target.osx-64.tasks]
+dl-prism = { cmd = '''python -c "
+import json, os, urllib.request, tarfile, zipfile, shutil
+tag = 'prism-b10754-2459f68'
+target = 'llama-prism/llama-server'
+if not os.path.exists(target):
+    print(f'Fetching prebuilt Prism macOS x64 binary ({tag})...')
+    req = urllib.request.Request(f'https://api.github.com/repos/PrismML-Eng/llama.cpp/releases/tags/{tag}', headers={'User-Agent': 'Mozilla/5.0'})
+    url = None
+    try:
+        assets = json.loads(urllib.request.urlopen(req).read().decode()).get('assets', [])
+        url = next(a['browser_download_url'] for a in assets if any(k in a['name'].lower() for k in ['mac', 'osx', 'darwin', 'apple']))
+    except Exception:
+        url = f'https://github.com/PrismML-Eng/llama.cpp/releases/download/{tag}/llama-prism-{tag}-bin-macos-x64.tar.gz'
+    archive = 'prism_download.tmp'
+    urllib.request.urlretrieve(url, archive)
+    temp_dir = 'prism_temp_extract'
+    os.makedirs(temp_dir, exist_ok=True)
+    os.makedirs('llama-prism', exist_ok=True)
+    try:
+        with zipfile.ZipFile(archive, 'r') as z: z.extractall(temp_dir)
+    except Exception:
+        with tarfile.open(archive, 'r:*') as t: t.extractall(temp_dir)
+    for root, dirs, files in os.walk(temp_dir):
+        for f in files:
+            src = os.path.join(root, f)
+            dst = os.path.join('llama-prism', f)
+            shutil.move(src, dst)
+            try: os.chmod(dst, 0o755)
+            except Exception: pass
+    shutil.rmtree(temp_dir)
+    if os.path.exists(archive): os.remove(archive)
+    print('Prebuilt macOS binary extracted successfully.')
+"''' }
+
+serve = { depends-on = ["dl-target", "dl-draft", "dl-prism"], cmd = "./llama-prism/llama-server -m ./models/Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-PQ2_0.gguf -md ./models/Qwen3.8-27B-DFlash2-Q4_K_M.gguf --spec-type draft-dflash --spec-draft-n-max 3 -ngl 99 -ngld 99 -sm layer -c 256144 -ctk q4_0 -ctv q4_0 -np 1 -fa on --no-repack --repeat-penalty 1.0 --temp 0.65 --host 127.0.0.1 --port 8080" }
