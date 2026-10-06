@@ -60,11 +60,11 @@ if not key:
     key = secrets.token_hex(16)
     with open(env_file, 'a') as f:
         f.write(f'LLAMA_API_KEY={key}\n')
-    print(f'Generated new LLAMA_API_KEY in .env: {key}')
+    print('Generated new LLAMA_API_KEY in .env')
 else:
-    print(f'Using LLAMA_API_KEY from .env: {key}')
+    print('Loaded LLAMA_API_KEY from .env')
 
-cmd = [r'.\llama-prism\llama-server.exe', '-m', r'.\models\Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-PQ2_0.gguf', '-md', r'.\models\Qwen3.8-27B-DFlash2-Q4_K_M.gguf', '--spec-type', 'draft-dflash', '--spec-draft-n-max', '7', '--reasoning-preserve', '--cache-reuse', '256', '--slot-save-path', r'.\llama-slots', '--cors-origins', 'http://localhost,http://127.0.0.1', '--api-key', key, '-ngl', '99', '-ngld', '99', '-sm', 'layer', '-c', '256144', '-b', '4096', '-ub', '1024', '-t', '8', '-np', '1', '-fa', 'on', '--no-repack', '--repeat-penalty', '1.0', '--temp', '0.65', '--host', '127.0.0.1', '--port', '9931']
+cmd = [r'.\llama-prism\llama-server.exe', '-m', r'.\models\Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-PQ2_0.gguf', '-md', r'.\models\Qwen3.8-27B-DFlash2-Q4_K_M.gguf', '--spec-type', 'draft-dflash', '--spec-draft-n-max', '7', '--reasoning-preserve', '--slot-save-path', r'.\llama-slots', '--cors-origins', 'http://localhost,http://127.0.0.1', '--api-key', key, '-ngl', '99', '-ngld', '99', '-sm', 'layer', '-c', '256144', '-b', '4096', '-ub', '1024', '-ctk', 'q8_0', '-ctv', 'q8_0', '-t', '8', '-np', '1', '-fa', 'on', '--no-repack', '--repeat-penalty', '1.0', '--temp', '0.65', '--host', '127.0.0.1', '--port', '9931']
 sys.exit(subprocess.call(cmd))
 "''', env = { CUDA_VISIBLE_DEVICES = "0,1" } }
 
@@ -118,11 +118,11 @@ if not key:
     key = secrets.token_hex(16)
     with open(env_file, 'a') as f:
         f.write(f'LLAMA_API_KEY={key}\n')
-    print(f'Generated new LLAMA_API_KEY in .env: {key}')
+    print('Generated new LLAMA_API_KEY in .env')
 else:
-    print(f'Using LLAMA_API_KEY from .env: {key}')
+    print('Loaded LLAMA_API_KEY from .env')
 
-cmd = ['./llama-prism/llama-server', '-m', './models/Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-PQ2_0.gguf', '-md', './models/Qwen3.8-27B-DFlash2-Q4_K_M.gguf', '--spec-type', 'draft-dflash', '--spec-draft-n-max', '7', '--reasoning-preserve', '--cache-reuse', '256', '--slot-save-path', './llama-slots', '--cors-origins', 'http://localhost,http://127.0.0.1', '--api-key', key, '-ngl', '99', '-ngld', '99', '-sm', 'layer', '-c', '256144', '-b', '4096', '-ub', '1024', '-t', '8', '-np', '1', '-fa', 'on', '--no-repack', '--repeat-penalty', '1.0', '--temp', '0.65', '--host', '127.0.0.1', '--port', '9931']
+cmd = ['./llama-prism/llama-server', '-m', './models/Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-PQ2_0.gguf', '-md', './models/Qwen3.8-27B-DFlash2-Q4_K_M.gguf', '--spec-type', 'draft-dflash', '--spec-draft-n-max', '7', '--reasoning-preserve', '--slot-save-path', './llama-slots', '--cors-origins', 'http://localhost,http://127.0.0.1', '--api-key', key, '-ngl', '99', '-ngld', '99', '-sm', 'layer', '-c', '256144', '-b', '4096', '-ub', '1024', '-ctk', 'q8_0', '-ctv', 'q8_0', '-t', '8', '-np', '1', '-fa', 'on', '--no-repack', '--repeat-penalty', '1.0', '--temp', '0.65', '--host', '127.0.0.1', '--port', '9931']
 sys.exit(subprocess.call(cmd))
 "''', env = { CUDA_VISIBLE_DEVICES = "0,1" } }
 
@@ -176,11 +176,11 @@ if not key:
     key = secrets.token_hex(16)
     with open(env_file, 'a') as f:
         f.write(f'LLAMA_API_KEY={key}\n')
-    print(f'Generated new LLAMA_API_KEY in .env: {key}')
+    print('Generated new LLAMA_API_KEY in .env')
 else:
-    print(f'Using LLAMA_API_KEY from .env: {key}')
+    print('Loaded LLAMA_API_KEY from .env')
 
-cmd = ['./llama-prism/llama-server', '-m', './models/Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-PQ2_0.gguf', '-md', './models/Qwen3.8-27B-DFlash2-Q4_K_M.gguf', '--spec-type', 'draft-dflash', '--spec-draft-n-max', '7', '--reasoning-preserve', '--cache-reuse', '256', '--slot-save-path', './llama-slots', '--cors-origins', 'http://localhost,http://127.0.0.1', '--api-key', key, '-ngl', '99', '-ngld', '99', '-sm', 'layer', '-c', '256144', '-b', '4096', '-ub', '1024', '-t', '8', '-np', '1', '-fa', 'on', '--no-repack', '--repeat-penalty', '1.0', '--temp', '0.65', '--host', '127.0.0.1', '--port', '9931']
+cmd = ['./llama-prism/llama-server', '-m', './models/Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-PQ2_0.gguf', '-md', './models/Qwen3.8-27B-DFlash2-Q4_K_M.gguf', '--spec-type', 'draft-dflash', '--spec-draft-n-max', '7', '--reasoning-preserve', '--slot-save-path', './llama-slots', '--cors-origins', 'http://localhost,http://127.0.0.1', '--api-key', key, '-ngl', '99', '-ngld', '99', '-sm', 'layer', '-c', '256144', '-b', '4096', '-ub', '1024', '-ctk', 'q8_0', '-ctv', 'q8_0', '-t', '8', '-np', '1', '-fa', 'on', '--no-repack', '--repeat-penalty', '1.0', '--temp', '0.65', '--host', '127.0.0.1', '--port', '9931']
 sys.exit(subprocess.call(cmd))
 "''' }
 
@@ -234,10 +234,10 @@ if not key:
     key = secrets.token_hex(16)
     with open(env_file, 'a') as f:
         f.write(f'LLAMA_API_KEY={key}\n')
-    print(f'Generated new LLAMA_API_KEY in .env: {key}')
+    print('Generated new LLAMA_API_KEY in .env')
 else:
-    print(f'Using LLAMA_API_KEY from .env: {key}')
+    print('Loaded LLAMA_API_KEY from .env')
 
-cmd = ['./llama-prism/llama-server', '-m', './models/Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-PQ2_0.gguf', '-md', './models/Qwen3.8-27B-DFlash2-Q4_K_M.gguf', '--spec-type', 'draft-dflash', '--spec-draft-n-max', '7', '--reasoning-preserve', '--cache-reuse', '256', '--slot-save-path', './llama-slots', '--cors-origins', 'http://localhost,http://127.0.0.1', '--api-key', key, '-ngl', '99', '-ngld', '99', '-sm', 'layer', '-c', '256144', '-b', '4096', '-ub', '1024', '-t', '8', '-np', '1', '-fa', 'on', '--no-repack', '--repeat-penalty', '1.0', '--temp', '0.65', '--host', '127.0.0.1', '--port', '9931']
+cmd = ['./llama-prism/llama-server', '-m', './models/Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-PQ2_0.gguf', '-md', './models/Qwen3.8-27B-DFlash2-Q4_K_M.gguf', '--spec-type', 'draft-dflash', '--spec-draft-n-max', '7', '--reasoning-preserve', '--slot-save-path', './llama-slots', '--cors-origins', 'http://localhost,http://127.0.0.1', '--api-key', key, '-ngl', '99', '-ngld', '99', '-sm', 'layer', '-c', '256144', '-b', '4096', '-ub', '1024', '-ctk', 'q8_0', '-ctv', 'q8_0', '-t', '8', '-np', '1', '-fa', 'on', '--no-repack', '--repeat-penalty', '1.0', '--temp', '0.65', '--host', '127.0.0.1', '--port', '9931']
 sys.exit(subprocess.call(cmd))
 "''' }
