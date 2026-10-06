@@ -1,5 +1,6 @@
 /.pixi/
 /models/
 /llama-prism
-prism.tar.gz
+/prism.tar.gz
 /.env
+/llama-slots/
