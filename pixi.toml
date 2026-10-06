@@ -1,12 +1,13 @@
 [workspace]
 name = "strata-qwen38-flash"
 version = "0.1.39"
-description = "Strata v0.1.39 launcher with root models cache preservation and durable SSD prefix caching"
+description = "Zero-argument launcher for Strata v0.1.39 with dual 3090+4090 GPUs, durable caching, and auto-repaired BPE tokenizer"
 channels = ["conda-forge", "nvidia"]
 platforms = ["win-64", "linux-64"]
 
 [dependencies]
 python = "3.11.*"
+regex = "*"
 git = "*"
 huggingface_hub = ">=0.28"
 fastapi = "*"
@@ -40,8 +41,9 @@ if not os.path.exists('Strata-src'):
     print('Strata v0.1.39 release source extracted to Strata-src.')
 "''' }
 
-# Points strictly to the project root ./models so existing cached shards are instantly recognized
 dl-model = "hf download ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF --include 'IQ2_XS/*' --local-dir ./models"
+
+dl-tokenizer = "hf download Qwen/Qwen3.8-27B --include 'vocab.json' --include 'merges.txt' --include 'tokenizer.json' --include 'tokenizer_config.json' --local-dir ./Strata-src/pack/full/tokenizer"
 
 [target.win-64.tasks]
 dl-engine = { cmd = '''python -c "
@@ -58,10 +60,10 @@ if not os.path.exists(target):
     print('Strata C++ engine binary extracted to Strata-src.')
 "''' }
 
-serve = { depends-on = ["dl-strata-repo", "dl-model", "dl-engine"], cmd = '''python -c "
-import os, secrets, subprocess, sys, glob, shutil
+serve = { depends-on = ["dl-strata-repo", "dl-model", "dl-tokenizer", "dl-engine"], cmd = '''python -c "
+import os, json, secrets, subprocess, sys, glob, shutil
 
-# Consolidate any shards if they were partially saved under Strata-src/models
+# Preserve/consolidate any shards previously downloaded into Strata-src/models
 if os.path.exists('./Strata-src/models'):
     os.makedirs('./models', exist_ok=True)
     for root, dirs, files in os.walk('./Strata-src/models'):
@@ -88,38 +90,132 @@ if not key:
     with open(env_file, 'a') as f:
         f.write(f'STRATA_API_KEY={key}\n')
 
-model_files = (
-    glob.glob(r'./models/**/IQ2_XS/*00001*.gguf', recursive=True) +
-    glob.glob(r'./models/**/*00001*.gguf', recursive=True) +
-    glob.glob(r'./models/**/*.gguf', recursive=True)
-)
+all_ggufs = glob.glob(r'./models/**/*.gguf', recursive=True)
+shard1_files = [f for f in all_ggufs if '00001-of' in f or '00001.gguf' in f]
+shard2_files = [f for f in all_ggufs if '00002-of' in f and '00001-of' not in f]
 
-if not model_files:
-    sys.exit('Error: No IQ2_XS model file found in ./models')
+if not shard1_files and all_ggufs:
+    shard1_files = [all_ggufs[0]]
 
-model_path = os.path.abspath(model_files[0])
-cache_dir = os.path.abspath(r'./strata_cache')
+if not shard1_files:
+    sys.exit('Error: No GGUF model files found in ./models')
+
+shard1_path = os.path.abspath(shard1_files[0])
+shard2_path = os.path.abspath(shard2_files[0]) if shard2_files else None
+
+s1_size_gb = os.path.getsize(shard1_path) / (1024**3)
+print(f'Shard 1: {os.path.basename(shard1_path)} ({s1_size_gb:.2f} GB)')
+if shard2_path:
+    s2_size_gb = os.path.getsize(shard2_path) / (1024**3)
+    print(f'Shard 2 (PLE): {os.path.basename(shard2_path)} ({s2_size_gb:.2f} GB)')
+
 profile_path = os.path.abspath(r'./expert_profile.bin')
+cache_dir = os.path.abspath(r'./strata_cache')
 os.makedirs(cache_dir, exist_ok=True)
-os.chdir('Strata-src')
+
+strata_exe = os.path.abspath(r'./Strata-src/strata.exe')
+strata_cwd = os.path.abspath(r'./Strata-src')
+tokenizer_dir = os.path.abspath(r'./Strata-src/pack/full/tokenizer')
+os.makedirs(tokenizer_dir, exist_ok=True)
+
+# Sanitize merges.txt binary buffer to eliminate trailing empty line crashes
+merges_path = os.path.join(tokenizer_dir, 'merges.txt')
+if os.path.exists(merges_path):
+    with open(merges_path, 'rb') as f:
+        raw = f.read()
+    raw_clean = raw.rstrip(b'\r\n ')
+    lines = raw_clean.split(b'\n')
+    
+    # Verify valid pair structure; re-fetch from HF if file was previously corrupted
+    corrupted = False
+    for idx, line in enumerate(lines):
+        if idx == 0 and line.startswith(b'#'):
+            continue
+        if len(line.split(b' ')) != 2:
+            corrupted = True
+            break
+            
+    if corrupted:
+        print('Detected corrupted merges.txt; re-downloading pristine version from HF...')
+        from huggingface_hub import hf_hub_download
+        hf_hub_download(repo_id='Qwen/Qwen3.8-27B', filename='merges.txt', local_dir=tokenizer_dir, force_download=True)
+        with open(merges_path, 'rb') as f:
+            raw_clean = f.read().rstrip(b'\r\n ')
+        lines = raw_clean.split(b'\n')
+        
+    with open(merges_path, 'wb') as f:
+        f.write(raw_clean)
+    print(f'Sanitized merges.txt ({len(lines)} entries).')
+
+token_type_path = os.path.join(tokenizer_dir, 'token_type.json')
+if not os.path.exists(token_type_path):
+    existing = glob.glob(r'./**/*token_type*.json', recursive=True)
+    if existing:
+        shutil.copy(existing[0], token_type_path)
+        print(f'Copied token_type.json from {existing[0]}')
+    else:
+        with open(token_type_path, 'w', encoding='utf-8') as f:
+            json.dump({}, f)
+        print('Created fallback token_type.json in tokenizer folder')
+
+engine_args = [
+    '--native', shard1_path,
+    '--expert-profile', profile_path,
+    '--remote-expert-opt',
+    '--prefill', 'auto',
+    '--max-context', '262144'
+]
+
+if shard2_path:
+    engine_args.extend(['--ple-gguf', shard2_path])
+
+log_path = os.path.abspath(r'./Strata-src/strata_engine.log')
+
+config_data = {
+    'exe': strata_exe,
+    'cwd': strata_cwd,
+    'args': engine_args,
+    'parallel': 4,
+    'port': 9931,
+    'host': '0.0.0.0',
+    'api_key': key,
+    'tokenizer': tokenizer_dir,
+    'log': log_path
+}
+
+config_path = os.path.abspath(r'./Strata-src/strata-config.json')
+with open(config_path, 'w', encoding='utf-8') as f:
+    json.dump(config_data, f, indent=2)
+
+print(f'Generated Strata configuration at: {config_path}')
+
+os.chdir(strata_cwd)
 
 cmd = [
     sys.executable,
     os.path.join('serve', 'server.py'),
-    '--engine', r'strata',
-    '--model', model_path,
-    '--parallel', '4',
-    '--kv', 'k8v4',
-    '--prompt-cache', '8',
-    '--prompt-cache-every', '2048',
-    '--prompt-cache-dir', cache_dir,
-    '--conversation-cache-mib', '8192',
-    '--expert-profile-save', profile_path,
+    '--engine', 'strata',
+    '--config', config_path,
+    '--tokenizer', tokenizer_dir,
     '--host', '0.0.0.0',
     '--port', '9931',
     '--api-key', key
 ]
-sys.exit(subprocess.call(cmd))
+
+res = subprocess.call(cmd)
+if res != 0:
+    print('\n--- Strata Engine Error Log Output ---')
+    logs = glob.glob('*.log')
+    if logs:
+        for lf in logs:
+            print(f'=== Log File: {lf} ===')
+            with open(lf, 'r', encoding='utf-8', errors='ignore') as f:
+                lines = f.readlines()
+                print(''.join(lines[-40:]))
+    else:
+        print('No log files found in Strata-src.')
+
+sys.exit(res)
 "''', env = { CUDA_VISIBLE_DEVICES = "0,1", STRATA_PF_FUSED = "1" } }
 
 [target.linux-64.tasks]
@@ -137,8 +233,8 @@ if not os.path.exists(target):
     print('Strata C++ engine binary extracted to Strata-src.')
 "''' }
 
-serve = { depends-on = ["dl-strata-repo", "dl-model", "dl-engine"], cmd = '''python -c "
-import os, secrets, subprocess, sys, glob, shutil
+serve = { depends-on = ["dl-strata-repo", "dl-model", "dl-tokenizer", "dl-engine"], cmd = '''python -c "
+import os, json, secrets, subprocess, sys, glob, shutil
 
 if os.path.exists('./Strata-src/models'):
     os.makedirs('./models', exist_ok=True)
@@ -166,36 +262,128 @@ if not key:
     with open(env_file, 'a') as f:
         f.write(f'STRATA_API_KEY={key}\n')
 
-model_files = (
-    glob.glob('./models/**/IQ2_XS/*00001*.gguf', recursive=True) +
-    glob.glob('./models/**/*00001*.gguf', recursive=True) +
-    glob.glob('./models/**/*.gguf', recursive=True)
-)
+all_ggufs = glob.glob('./models/**/*.gguf', recursive=True)
+shard1_files = [f for f in all_ggufs if '00001-of' in f or '00001.gguf' in f]
+shard2_files = [f for f in all_ggufs if '00002-of' in f and '00001-of' not in f]
 
-if not model_files:
-    sys.exit('Error: No IQ2_XS model file found in ./models')
+if not shard1_files and all_ggufs:
+    shard1_files = [all_ggufs[0]]
 
-model_path = os.path.abspath(model_files[0])
-cache_dir = os.path.abspath('./strata_cache')
+if not shard1_files:
+    sys.exit('Error: No GGUF model files found in ./models')
+
+shard1_path = os.path.abspath(shard1_files[0])
+shard2_path = os.path.abspath(shard2_files[0]) if shard2_files else None
+
+s1_size_gb = os.path.getsize(shard1_path) / (1024**3)
+print(f'Shard 1: {os.path.basename(shard1_path)} ({s1_size_gb:.2f} GB)')
+if shard2_path:
+    s2_size_gb = os.path.getsize(shard2_path) / (1024**3)
+    print(f'Shard 2 (PLE): {os.path.basename(shard2_path)} ({s2_size_gb:.2f} GB)')
+
 profile_path = os.path.abspath('./expert_profile.bin')
+cache_dir = os.path.abspath('./strata_cache')
 os.makedirs(cache_dir, exist_ok=True)
-os.chdir('Strata-src')
+
+strata_exe = os.path.abspath('./Strata-src/strata')
+strata_cwd = os.path.abspath('./Strata-src')
+tokenizer_dir = os.path.abspath('./Strata-src/pack/full/tokenizer')
+os.makedirs(tokenizer_dir, exist_ok=True)
+
+merges_path = os.path.join(tokenizer_dir, 'merges.txt')
+if os.path.exists(merges_path):
+    with open(merges_path, 'rb') as f:
+        raw = f.read()
+    raw_clean = raw.rstrip(b'\r\n ')
+    lines = raw_clean.split(b'\n')
+    
+    corrupted = False
+    for idx, line in enumerate(lines):
+        if idx == 0 and line.startswith(b'#'):
+            continue
+        if len(line.split(b' ')) != 2:
+            corrupted = True
+            break
+            
+    if corrupted:
+        print('Detected corrupted merges.txt; re-downloading pristine version from HF...')
+        from huggingface_hub import hf_hub_download
+        hf_hub_download(repo_id='Qwen/Qwen3.8-27B', filename='merges.txt', local_dir=tokenizer_dir, force_download=True)
+        with open(merges_path, 'rb') as f:
+            raw_clean = f.read().rstrip(b'\r\n ')
+        lines = raw_clean.split(b'\n')
+        
+    with open(merges_path, 'wb') as f:
+        f.write(raw_clean)
+    print(f'Sanitized merges.txt ({len(lines)} entries).')
+
+token_type_path = os.path.join(tokenizer_dir, 'token_type.json')
+if not os.path.exists(token_type_path):
+    existing = glob.glob('./**/*token_type*.json', recursive=True)
+    if existing:
+        shutil.copy(existing[0], token_type_path)
+        print(f'Copied token_type.json from {existing[0]}')
+    else:
+        with open(token_type_path, 'w', encoding='utf-8') as f:
+            json.dump({}, f)
+        print('Created fallback token_type.json in tokenizer folder')
+
+engine_args = [
+    '--native', shard1_path,
+    '--expert-profile', profile_path,
+    '--remote-expert-opt',
+    '--prefill', 'auto',
+    '--max-context', '262144'
+]
+
+if shard2_path:
+    engine_args.extend(['--ple-gguf', shard2_path])
+
+log_path = os.path.abspath('./Strata-src/strata_engine.log')
+
+config_data = {
+    'exe': strata_exe,
+    'cwd': strata_cwd,
+    'args': engine_args,
+    'parallel': 4,
+    'port': 9931,
+    'host': '0.0.0.0',
+    'api_key': key,
+    'tokenizer': tokenizer_dir,
+    'log': log_path
+}
+
+config_path = os.path.abspath('./Strata-src/strata-config.json')
+with open(config_path, 'w', encoding='utf-8') as f:
+    json.dump(config_data, f, indent=2)
+
+print(f'Generated Strata configuration at: {config_path}')
+
+os.chdir(strata_cwd)
 
 cmd = [
     sys.executable,
     'serve/server.py',
     '--engine', 'strata',
-    '--model', model_path,
-    '--parallel', '4',
-    '--kv', 'k8v4',
-    '--prompt-cache', '8',
-    '--prompt-cache-every', '2048',
-    '--prompt-cache-dir', cache_dir,
-    '--conversation-cache-mib', '8192',
-    '--expert-profile-save', profile_path,
+    '--config', config_path,
+    '--tokenizer', tokenizer_dir,
     '--host', '0.0.0.0',
     '--port', '9931',
     '--api-key', key
 ]
-sys.exit(subprocess.call(cmd))
+
+res = subprocess.call(cmd)
+if res != 0:
+    print('\n--- Strata Engine Error Log Output ---')
+    logs = glob.glob('*.log')
+    if logs:
+        for lf in logs:
+            print(f'=== Log File: {lf} ===')
+            with open(lf, 'r', encoding='utf-8', errors='ignore') as f:
+                lines = f.readlines()
+                print(''.join(lines[-40:]))
+    else:
+        print('No log files found in Strata-src.')
+
+sys.exit(res)
 "''', env = { CUDA_VISIBLE_DEVICES = "0,1", STRATA_PF_FUSED = "1" } }
