@@ -1,433 +1,243 @@
 [workspace]
-name = "strata-qwen38-flash"
-version = "0.1.39"
-description = "Zero-argument launcher for Strata v0.1.39 with RTX 3090 support, optional extra GPUs, durable caching, and auto-repaired BPE tokenizer"
+name = "bonsai-v2-auto"
+version = "0.5.0"
+description = "Zero-argument single-step launcher for Ternary-Bonsai-2-27B with DFlash2"
 channels = ["conda-forge", "nvidia"]
-platforms = ["win-64", "linux-64"]
+platforms = ["win-64", "linux-64", "osx-64", "osx-arm64"]
 
 [dependencies]
 python = "3.11.*"
-regex = "*"
 git = "*"
 huggingface_hub = ">=0.28"
-fastapi = "*"
-uvicorn = "*"
-requests = "*"
-numpy = ">=1.24"
-
-[pypi-dependencies]
-gguf = ">=0.13"
 
 [target.win-64.dependencies]
-cuda-toolkit = ">=12.4,<13"
+cuda-toolkit = ">=12.4"
 
 [target.linux-64.dependencies]
-cuda-toolkit = ">=12.4,<13"
+cuda-toolkit = ">=12.4"
 
 [tasks]
 default = { depends-on = ["serve"] }
 
-dl-strata-repo = { cmd = '''python -c "
-import os, urllib.request, zipfile, shutil, glob
-if not os.path.exists('Strata-src'):
-    print('Downloading Strata v0.1.39 release source archive...')
-    url = 'https://github.com/Niko1221/Strata/archive/refs/tags/v0.1.39.zip'
-    urllib.request.urlretrieve(url, 'strata_release.zip')
-    temp_dir = 'strata_temp_src'
-    os.makedirs(temp_dir, exist_ok=True)
-    with zipfile.ZipFile('strata_release.zip', 'r') as z:
-        z.extractall(temp_dir)
-    extracted_folders = [f for f in glob.glob(os.path.join(temp_dir, '*')) if os.path.isdir(f)]
-    if extracted_folders:
-        shutil.move(extracted_folders[0], 'Strata-src')
-    shutil.rmtree(temp_dir, ignore_errors=True)
-    if os.path.exists('strata_release.zip'): os.remove('strata_release.zip')
-    print('Strata v0.1.39 release source extracted to Strata-src.')
-"''' }
-
-dl-model = "hf download ISTA-DASLab/Qwen3.8-Flash-Next-GSQ-RCO-GGUF --include 'IQ2_XS/*' --local-dir ./models"
-
-dl-tokenizer = { depends-on = ["dl-strata-repo", "dl-model"], cmd = "python ./Strata-src/tools/strata_tokenizer.py --gguf ./models/IQ2_XS/Qwen3.8-Flash-Next-GSQ-RCO-IQ2_XS-00001-of-00002.gguf --out ./Strata-src/pack/full" }
-
-pack-model = { depends-on = ["dl-model", "dl-tokenizer"], cmd = "python ./Strata-src/tools/iq_pack.py --gguf ./models/IQ2_XS/Qwen3.8-Flash-Next-GSQ-RCO-IQ2_XS-00001-of-00002.gguf --out ./Strata-src/pack/full" }
-
-mtp-fetch = { depends-on = ["dl-strata-repo"], cmd = "python ./Strata-src/tools/mtp_fetch.py fetch --out ./mtp" }
-
-prepare-mtp = { depends-on = ["mtp-fetch"], cmd = '''python -c "
-import os, site, subprocess, sys
-
-env = dict(os.environ, STRATA_GGUF_PY=site.getsitepackages()[0])
-gguf = os.path.abspath('./mtp/mtp-q2_0.gguf')
-runtime = os.path.abspath('./mtp/rt')
-
-if not os.path.exists(gguf):
-    subprocess.run([sys.executable, './Strata-src/tools/mtp_pack.py', '--src', './mtp',
-                    '--experts', 'q2_0', '--out', gguf], check=True, env=env)
-if not os.path.exists(os.path.join(runtime, 'experts.bin')):
-    subprocess.run([sys.executable, './Strata-src/tools/mtp_rt.py', '--gguf', gguf,
-                    '--out', runtime], check=True, env=env)
-"''' }
+dl-target = "hf download OS-Software/Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-GGUF Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-PQ2_0.gguf --local-dir ./models"
+dl-draft = "hf download incoai/Qwen3.8-27B-DFlash2-GGUF Qwen3.8-27B-DFlash2-Q4_K_M.gguf --local-dir ./models"
 
 [target.win-64.tasks]
-dl-engine = { cmd = '''python -c "
+dl-prism = { cmd = '''python -c "
 import os, urllib.request, zipfile
-target = 'Strata-src/strata.exe'
+target = 'llama-prism/llama-server.exe'
 if not os.path.exists(target):
-    print('Fetching Strata v0.1.39 C++ engine binary...')
-    url = 'https://github.com/Niko1221/Strata/releases/download/v0.1.39/strata-windows-x64-cuda12.zip'
-    zpath = 'strata_engine.zip'
-    urllib.request.urlretrieve(url, zpath)
-    with zipfile.ZipFile(zpath, 'r') as z:
-        z.extractall('Strata-src')
-    if os.path.exists(zpath): os.remove(zpath)
-    print('Strata C++ engine binary extracted to Strata-src.')
-"''', depends-on = ["dl-strata-repo"] }
+    print('Fetching Prism CUDA 13.3 binary and runtime DLLs...')
+    urls = [
+        'https://github.com/PrismML-Eng/llama.cpp/releases/download/prism-b10754-2459f68/llama-prism-b10754-2459f68-bin-win-cuda-13.3-x64.zip',
+        'https://github.com/PrismML-Eng/llama.cpp/releases/download/prism-b10754-2459f68/cudart-llama-bin-win-cuda-13.3-x64.zip'
+    ]
+    os.makedirs('llama-prism', exist_ok=True)
+    for idx, url in enumerate(urls):
+        zpath = f'prism_temp_{idx}.zip'
+        urllib.request.urlretrieve(url, zpath)
+        with zipfile.ZipFile(zpath, 'r') as z:
+            for item in z.infolist():
+                fname = os.path.basename(item.filename)
+                if fname:
+                    open(os.path.join('llama-prism', fname), 'wb').write(z.open(item).read())
+        if os.path.exists(zpath): os.remove(zpath)
+    print('Extracted Prism binary and CUDA runtime DLLs successfully.')
+"''' }
 
-serve = { depends-on = ["pack-model", "prepare-mtp", "dl-engine"], cmd = '''python -c "
-import os, json, secrets, subprocess, sys, glob, shutil
-
-os.environ.setdefault('CUDA_VISIBLE_DEVICES', '0')
-
-if os.path.exists('./Strata-src/models'):
-    os.makedirs('./models', exist_ok=True)
-    for root, dirs, files in os.walk('./Strata-src/models'):
-        for f in files:
-            if f.endswith('.gguf'):
-                src = os.path.join(root, f)
-                rel = os.path.relpath(src, './Strata-src/models')
-                dst = os.path.join('./models', rel)
-                os.makedirs(os.path.dirname(dst), exist_ok=True)
-                if not os.path.exists(dst):
-                    print(f'Preserving cached file: moving {f} to ./models')
-                    shutil.move(src, dst)
-
+serve = { depends-on = ["dl-target", "dl-draft", "dl-prism"], cmd = '''python -c "
+import os, secrets, subprocess, sys
+os.makedirs('llama-slots', exist_ok=True)
 env_file = '.env'
 key = None
 if os.path.exists(env_file):
     with open(env_file, 'r') as f:
         for line in f:
-            if line.strip().startswith('STRATA_API_KEY='):
+            if line.strip().startswith('LLAMA_API_KEY='):
                 key = line.strip().split('=', 1)[1].strip(' ' + chr(34) + chr(39))
                 break
 if not key:
     key = secrets.token_hex(16)
     with open(env_file, 'a') as f:
-        f.write(f'STRATA_API_KEY={key}\n')
+        f.write(f'LLAMA_API_KEY={key}\n')
+    print('Generated new LLAMA_API_KEY in .env')
+else:
+    print('Loaded LLAMA_API_KEY from .env')
 
-all_ggufs = glob.glob(r'./models/**/*.gguf', recursive=True)
-shard1_files = [f for f in all_ggufs if '00001-of' in f or '00001.gguf' in f]
-shard2_files = [f for f in all_ggufs if '00002-of' in f and '00001-of' not in f]
-
-if not shard1_files and all_ggufs:
-    shard1_files = [all_ggufs[0]]
-
-if not shard1_files:
-    sys.exit('Error: No GGUF model files found in ./models')
-
-shard1_path = os.path.abspath(shard1_files[0])
-shard2_path = os.path.abspath(shard2_files[0]) if shard2_files else None
-
-s1_size_gb = os.path.getsize(shard1_path) / (1024**3)
-print(f'Shard 1: {os.path.basename(shard1_path)} ({s1_size_gb:.2f} GB)')
-if shard2_path:
-    s2_size_gb = os.path.getsize(shard2_path) / (1024**3)
-    print(f'Shard 2 (PLE): {os.path.basename(shard2_path)} ({s2_size_gb:.2f} GB)')
-
-profile_path = os.path.abspath(r'./expert_profile.bin')
-cache_dir = os.path.abspath(r'./strata_cache')
-os.makedirs(cache_dir, exist_ok=True)
-
-strata_exe = os.path.abspath(r'./Strata-src/strata.exe')
-strata_cwd = os.path.abspath(r'./Strata-src')
-pack_dir = os.path.abspath(r'./Strata-src/pack/full')
-tokenizer_dir = os.path.abspath(r'./Strata-src/pack/full/tokenizer')
-os.makedirs(tokenizer_dir, exist_ok=True)
-
-merges_path = os.path.join(tokenizer_dir, 'merges.txt')
-if os.path.exists(merges_path):
-    with open(merges_path, 'rb') as f:
-        raw = f.read()
-    raw_clean = raw.rstrip(b'\r\n ')
-    lines = raw_clean.split(b'\n')
-    
-    corrupted = False
-    for idx, line in enumerate(lines):
-        if idx == 0 and line.startswith(b'#'):
-            continue
-        if len(line.split(b' ')) != 2:
-            corrupted = True
-            break
-            
-    if corrupted:
-        print('Detected corrupted merges.txt; re-downloading pristine version from HF...')
-        from huggingface_hub import hf_hub_download
-        hf_hub_download(repo_id='Qwen/Qwen3.8-27B', filename='merges.txt', local_dir=tokenizer_dir, force_download=True)
-        with open(merges_path, 'rb') as f:
-            raw_clean = f.read().rstrip(b'\r\n ')
-        lines = raw_clean.split(b'\n')
-        
-    with open(merges_path, 'wb') as f:
-        f.write(raw_clean)
-    print(f'Sanitized merges.txt ({len(lines)} entries).')
-
-token_type_path = os.path.join(tokenizer_dir, 'token_type.json')
-if not os.path.exists(token_type_path):
-    existing = glob.glob(r'./**/*token_type*.json', recursive=True)
-    if existing:
-        shutil.copy(existing[0], token_type_path)
-        print(f'Copied token_type.json from {existing[0]}')
-    else:
-        with open(token_type_path, 'w', encoding='utf-8') as f:
-            json.dump({}, f)
-        print('Created fallback token_type.json in tokenizer folder')
-
-engine_args = [
-    '--pack', pack_dir,
-    '--native', shard1_path,
-    '--expert-cache', 'auto',
-    '--prefill', 'auto',
-    '--spec', '4',
-    '--spec-min-p', '0.5',
-    '--mtp', os.path.abspath('./mtp/rt'),
-    '--max-context', '262144'
-]
-
-engine_args.extend(['--kv', 'int8', '--kv-resident', '32768'])
-
-if os.path.exists(profile_path):
-    engine_args.extend(['--expert-profile', profile_path, '--remote-expert-opt'])
-
-if shard2_path:
-    engine_args.extend(['--ple-gguf', shard2_path])
-
-log_path = os.path.abspath(r'./Strata-src/strata_engine.log')
-
-config_data = {
-    'exe': strata_exe,
-    'cwd': strata_cwd,
-    'args': engine_args,
-    'pack': pack_dir,
-    'parallel': 4,
-    'port': 9932,
-    'host': '0.0.0.0',
-    'api_key': key,
-    'tokenizer': tokenizer_dir,
-    'log': log_path
-}
-
-config_path = os.path.abspath(r'./Strata-src/strata-config.json')
-with open(config_path, 'w', encoding='utf-8') as f:
-    json.dump(config_data, f, indent=2)
-
-print(f'Generated Strata configuration at: {config_path}')
-
-os.chdir(strata_cwd)
-
-cmd = [
-    sys.executable,
-    os.path.join('serve', 'server.py'),
-    '--engine', 'strata',
-    '--config', config_path,
-    '--tokenizer', tokenizer_dir,
-    '--host', '0.0.0.0',
-    '--port', '9932',
-    '--api-key', key
-]
-
-res = subprocess.call(cmd)
-if res != 0:
-    print('\n--- Strata Engine Error Log Output ---')
-    logs = glob.glob('*.log')
-    if logs:
-        for lf in logs:
-            print(f'=== Log File: {lf} ===')
-            with open(lf, 'r', encoding='utf-8', errors='ignore') as f:
-                lines = f.readlines()
-                print(''.join(lines[-40:]))
-    else:
-        print('No log files found in Strata-src.')
-
-sys.exit(res)
-"''', env = { STRATA_PF_FUSED = "1" } }
+cmd = [r'.\llama-prism\llama-server.exe', '-m', r'.\models\Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-PQ2_0.gguf', '-md', r'.\models\Qwen3.8-27B-DFlash2-Q4_K_M.gguf', '--spec-type', 'draft-dflash', '--spec-draft-n-max', '7', '--reasoning-preserve', '--slot-save-path', r'.\llama-slots', '--cors-origins', '*', '--api-key', key, '-ngl', '99', '-ngld', '99', '-sm', 'layer', '-c', '256144', '-b', '4096', '-ub', '1024', '-ctk', 'q8_0', '-ctv', 'q8_0', '-t', '8', '-np', '4', '-fa', 'on', '--no-repack', '--repeat-penalty', '1.0', '--temp', '0.65', '--host', '0.0.0.0', '--port', '9931']
+sys.exit(subprocess.call(cmd))
+"''', env = { CUDA_VISIBLE_DEVICES = "0,1" } }
 
 [target.linux-64.tasks]
-dl-engine = { cmd = '''python -c "
-import os, urllib.request, tarfile
-target = 'Strata-src/strata'
+dl-prism = { cmd = '''python -c "
+import json, os, urllib.request, tarfile, zipfile, shutil
+tag = 'prism-b10754-2459f68'
+target = 'llama-prism/llama-server'
 if not os.path.exists(target):
-    print('Fetching Strata v0.1.39 Linux engine binary...')
-    url = 'https://github.com/Niko1221/Strata/releases/download/v0.1.39/strata-linux-x64-cuda12.tar.gz'
-    archive = 'strata_engine.tar.gz'
+    print(f'Fetching prebuilt Prism Linux binary ({tag})...')
+    req = urllib.request.Request(f'https://api.github.com/repos/PrismML-Eng/llama.cpp/releases/tags/{tag}', headers={'User-Agent': 'Mozilla/5.0'})
+    url = None
+    try:
+        assets = json.loads(urllib.request.urlopen(req).read().decode()).get('assets', [])
+        url = next(a['browser_download_url'] for a in assets if any(k in a['name'].lower() for k in ['ubuntu', 'linux']))
+    except Exception:
+        url = f'https://github.com/PrismML-Eng/llama.cpp/releases/download/{tag}/llama-prism-{tag}-bin-ubuntu-x64.tar.gz'
+    archive = 'prism_download.tmp'
     urllib.request.urlretrieve(url, archive)
-    with tarfile.open(archive, 'r:*') as t:
-        t.extractall('Strata-src')
-    if os.path.exists(archive): os.remove(archive)
-    print('Strata C++ engine binary extracted to Strata-src.')
-"''', depends-on = ["dl-strata-repo"] }
-
-serve = { depends-on = ["pack-model", "prepare-mtp", "dl-engine"], cmd = '''python -c "
-import os, json, secrets, subprocess, sys, glob, shutil
-
-os.environ.setdefault('CUDA_VISIBLE_DEVICES', '0')
-
-if os.path.exists('./Strata-src/models'):
-    os.makedirs('./models', exist_ok=True)
-    for root, dirs, files in os.walk('./Strata-src/models'):
+    temp_dir = 'prism_temp_extract'
+    os.makedirs(temp_dir, exist_ok=True)
+    os.makedirs('llama-prism', exist_ok=True)
+    try:
+        with zipfile.ZipFile(archive, 'r') as z: z.extractall(temp_dir)
+    except Exception:
+        with tarfile.open(archive, 'r:*') as t: t.extractall(temp_dir)
+    for root, dirs, files in os.walk(temp_dir):
         for f in files:
-            if f.endswith('.gguf'):
-                src = os.path.join(root, f)
-                rel = os.path.relpath(src, './Strata-src/models')
-                dst = os.path.join('./models', rel)
-                os.makedirs(os.path.dirname(dst), exist_ok=True)
-                if not os.path.exists(dst):
-                    print(f'Preserving cached file: moving {f} to ./models')
-                    shutil.move(src, dst)
+            src = os.path.join(root, f)
+            dst = os.path.join('llama-prism', f)
+            shutil.move(src, dst)
+            try: os.chmod(dst, 0o755)
+            except Exception: pass
+    shutil.rmtree(temp_dir)
+    if os.path.exists(archive): os.remove(archive)
+    print('Prebuilt Linux binary extracted successfully.')
+"''' }
 
+serve = { depends-on = ["dl-target", "dl-draft", "dl-prism"], cmd = '''python -c "
+import os, secrets, subprocess, sys
+os.makedirs('llama-slots', exist_ok=True)
 env_file = '.env'
 key = None
 if os.path.exists(env_file):
     with open(env_file, 'r') as f:
         for line in f:
-            if line.strip().startswith('STRATA_API_KEY='):
+            if line.strip().startswith('LLAMA_API_KEY='):
                 key = line.strip().split('=', 1)[1].strip(' ' + chr(34) + chr(39))
                 break
 if not key:
     key = secrets.token_hex(16)
     with open(env_file, 'a') as f:
-        f.write(f'STRATA_API_KEY={key}\n')
+        f.write(f'LLAMA_API_KEY={key}\n')
+    print('Generated new LLAMA_API_KEY in .env')
+else:
+    print('Loaded LLAMA_API_KEY from .env')
 
-all_ggufs = glob.glob('./models/**/*.gguf', recursive=True)
-shard1_files = [f for f in all_ggufs if '00001-of' in f or '00001.gguf' in f]
-shard2_files = [f for f in all_ggufs if '00002-of' in f and '00001-of' not in f]
+cmd = ['./llama-prism/llama-server', '-m', './models/Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-PQ2_0.gguf', '-md', './models/Qwen3.8-27B-DFlash2-Q4_K_M.gguf', '--spec-type', 'draft-dflash', '--spec-draft-n-max', '7', '--reasoning-preserve', '--slot-save-path', './llama-slots', '--cors-origins', '*', '--api-key', key, '-ngl', '99', '-ngld', '99', '-sm', 'layer', '-c', '256144', '-b', '4096', '-ub', '1024', '-ctk', 'q8_0', '-ctv', 'q8_0', '-t', '8', '-np', '4', '-fa', 'on', '--no-repack', '--repeat-penalty', '1.0', '--temp', '0.65', '--host', '0.0.0.0', '--port', '9931']
+sys.exit(subprocess.call(cmd))
+"''', env = { CUDA_VISIBLE_DEVICES = "0,1" } }
 
-if not shard1_files and all_ggufs:
-    shard1_files = [all_ggufs[0]]
+[target.osx-arm64.tasks]
+dl-prism = { cmd = '''python -c "
+import json, os, urllib.request, tarfile, zipfile, shutil
+tag = 'prism-b10754-2459f68'
+target = 'llama-prism/llama-server'
+if not os.path.exists(target):
+    print(f'Fetching prebuilt Prism macOS Metal binary ({tag})...')
+    req = urllib.request.Request(f'https://api.github.com/repos/PrismML-Eng/llama.cpp/releases/tags/{tag}', headers={'User-Agent': 'Mozilla/5.0'})
+    url = None
+    try:
+        assets = json.loads(urllib.request.urlopen(req).read().decode()).get('assets', [])
+        url = next(a['browser_download_url'] for a in assets if any(k in a['name'].lower() for k in ['mac', 'osx', 'darwin', 'apple']))
+    except Exception:
+        url = f'https://github.com/PrismML-Eng/llama.cpp/releases/download/{tag}/llama-prism-{tag}-bin-macos-arm64.tar.gz'
+    archive = 'prism_download.tmp'
+    urllib.request.urlretrieve(url, archive)
+    temp_dir = 'prism_temp_extract'
+    os.makedirs(temp_dir, exist_ok=True)
+    os.makedirs('llama-prism', exist_ok=True)
+    try:
+        with zipfile.ZipFile(archive, 'r') as z: z.extractall(temp_dir)
+    except Exception:
+        with tarfile.open(archive, 'r:*') as t: t.extractall(temp_dir)
+    for root, dirs, files in os.walk(temp_dir):
+        for f in files:
+            src = os.path.join(root, f)
+            dst = os.path.join('llama-prism', f)
+            shutil.move(src, dst)
+            try: os.chmod(dst, 0o755)
+            except Exception: pass
+    shutil.rmtree(temp_dir)
+    if os.path.exists(archive): os.remove(archive)
+    print('Prebuilt macOS binary extracted successfully.')
+"''' }
 
-if not shard1_files:
-    sys.exit('Error: No GGUF model files found in ./models')
+serve = { depends-on = ["dl-target", "dl-draft", "dl-prism"], cmd = '''python -c "
+import os, secrets, subprocess, sys
+os.makedirs('llama-slots', exist_ok=True)
+env_file = '.env'
+key = None
+if os.path.exists(env_file):
+    with open(env_file, 'r') as f:
+        for line in f:
+            if line.strip().startswith('LLAMA_API_KEY='):
+                key = line.strip().split('=', 1)[1].strip(' ' + chr(34) + chr(39))
+                break
+if not key:
+    key = secrets.token_hex(16)
+    with open(env_file, 'a') as f:
+        f.write(f'LLAMA_API_KEY={key}\n')
+    print('Generated new LLAMA_API_KEY in .env')
+else:
+    print('Loaded LLAMA_API_KEY from .env')
 
-shard1_path = os.path.abspath(shard1_files[0])
-shard2_path = os.path.abspath(shard2_files[0]) if shard2_files else None
+cmd = ['./llama-prism/llama-server', '-m', './models/Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-PQ2_0.gguf', '-md', './models/Qwen3.8-27B-DFlash2-Q4_K_M.gguf', '--spec-type', 'draft-dflash', '--spec-draft-n-max', '7', '--reasoning-preserve', '--slot-save-path', './llama-slots', '--cors-origins', '*', '--api-key', key, '-ngl', '99', '-ngld', '99', '-sm', 'layer', '-c', '256144', '-b', '4096', '-ub', '1024', '-ctk', 'q8_0', '-ctv', 'q8_0', '-t', '8', '-np', '4', '-fa', 'on', '--no-repack', '--repeat-penalty', '1.0', '--temp', '0.65', '--host', '0.0.0.0', '--port', '9931']
+sys.exit(subprocess.call(cmd))
+"''' }
 
-s1_size_gb = os.path.getsize(shard1_path) / (1024**3)
-print(f'Shard 1: {os.path.basename(shard1_path)} ({s1_size_gb:.2f} GB)')
-if shard2_path:
-    s2_size_gb = os.path.getsize(shard2_path) / (1024**3)
-    print(f'Shard 2 (PLE): {os.path.basename(shard2_path)} ({s2_size_gb:.2f} GB)')
+[target.osx-64.tasks]
+dl-prism = { cmd = '''python -c "
+import json, os, urllib.request, tarfile, zipfile, shutil
+tag = 'prism-b10754-2459f68'
+target = 'llama-prism/llama-server'
+if not os.path.exists(target):
+    print(f'Fetching prebuilt Prism macOS x64 binary ({tag})...')
+    req = urllib.request.Request(f'https://api.github.com/repos/PrismML-Eng/llama.cpp/releases/tags/{tag}', headers={'User-Agent': 'Mozilla/5.0'})
+    url = None
+    try:
+        assets = json.loads(urllib.request.urlopen(req).read().decode()).get('assets', [])
+        url = next(a['browser_download_url'] for a in assets if any(k in a['name'].lower() for k in ['mac', 'osx', 'darwin', 'apple']))
+    except Exception:
+        url = f'https://github.com/PrismML-Eng/llama.cpp/releases/download/{tag}/llama-prism-{tag}-bin-macos-x64.tar.gz'
+    archive = 'prism_download.tmp'
+    urllib.request.urlretrieve(url, archive)
+    temp_dir = 'prism_temp_extract'
+    os.makedirs(temp_dir, exist_ok=True)
+    os.makedirs('llama-prism', exist_ok=True)
+    try:
+        with zipfile.ZipFile(archive, 'r') as z: z.extractall(temp_dir)
+    except Exception:
+        with tarfile.open(archive, 'r:*') as t: t.extractall(temp_dir)
+    for root, dirs, files in os.walk(temp_dir):
+        for f in files:
+            src = os.path.join(root, f)
+            dst = os.path.join('llama-prism', f)
+            shutil.move(src, dst)
+            try: os.chmod(dst, 0o755)
+            except Exception: pass
+    shutil.rmtree(temp_dir)
+    if os.path.exists(archive): os.remove(archive)
+    print('Prebuilt macOS binary extracted successfully.')
+"''' }
 
-profile_path = os.path.abspath('./expert_profile.bin')
-cache_dir = os.path.abspath('./strata_cache')
-os.makedirs(cache_dir, exist_ok=True)
+serve = { depends-on = ["dl-target", "dl-draft", "dl-prism"], cmd = '''python -c "
+import os, secrets, subprocess, sys
+os.makedirs('llama-slots', exist_ok=True)
+env_file = '.env'
+key = None
+if os.path.exists(env_file):
+    with open(env_file, 'r') as f:
+        for line in f:
+            if line.strip().startswith('LLAMA_API_KEY='):
+                key = line.strip().split('=', 1)[1].strip(' ' + chr(34) + chr(39))
+                break
+if not key:
+    key = secrets.token_hex(16)
+    with open(env_file, 'a') as f:
+        f.write(f'LLAMA_API_KEY={key}\n')
+    print('Generated new LLAMA_API_KEY in .env')
+else:
+    print('Loaded LLAMA_API_KEY from .env')
 
-strata_exe = os.path.abspath('./Strata-src/strata')
-strata_cwd = os.path.abspath('./Strata-src')
-pack_dir = os.path.abspath('./Strata-src/pack/full')
-tokenizer_dir = os.path.abspath('./Strata-src/pack/full/tokenizer')
-os.makedirs(tokenizer_dir, exist_ok=True)
-
-merges_path = os.path.join(tokenizer_dir, 'merges.txt')
-if os.path.exists(merges_path):
-    with open(merges_path, 'rb') as f:
-        raw = f.read()
-    raw_clean = raw.rstrip(b'\r\n ')
-    lines = raw_clean.split(b'\n')
-    
-    corrupted = False
-    for idx, line in enumerate(lines):
-        if idx == 0 and line.startswith(b'#'):
-            continue
-        if len(line.split(b' ')) != 2:
-            corrupted = True
-            break
-            
-    if corrupted:
-        print('Detected corrupted merges.txt; re-downloading pristine version from HF...')
-        from huggingface_hub import hf_hub_download
-        hf_hub_download(repo_id='Qwen/Qwen3.8-27B', filename='merges.txt', local_dir=tokenizer_dir, force_download=True)
-        with open(merges_path, 'rb') as f:
-            raw_clean = f.read().rstrip(b'\r\n ')
-        lines = raw_clean.split(b'\n')
-        
-    with open(merges_path, 'wb') as f:
-        f.write(raw_clean)
-    print(f'Sanitized merges.txt ({len(lines)} entries).')
-
-token_type_path = os.path.join(tokenizer_dir, 'token_type.json')
-if not os.path.exists(token_type_path):
-    existing = glob.glob('./**/*token_type*.json', recursive=True)
-    if existing:
-        shutil.copy(existing[0], token_type_path)
-        print(f'Copied token_type.json from {existing[0]}')
-    else:
-        with open(token_type_path, 'w', encoding='utf-8') as f:
-            json.dump({}, f)
-        print('Created fallback token_type.json in tokenizer folder')
-
-engine_args = [
-    '--pack', pack_dir,
-    '--native', shard1_path,
-    '--expert-cache', 'auto',
-    '--prefill', 'auto',
-    '--spec', '4',
-    '--spec-min-p', '0.5',
-    '--mtp', os.path.abspath('./mtp/rt'),
-    '--max-context', '262144'
-]
-
-engine_args.extend(['--kv', 'int8', '--kv-resident', '32768'])
-
-if os.path.exists(profile_path):
-    engine_args.extend(['--expert-profile', profile_path, '--remote-expert-opt'])
-
-if shard2_path:
-    engine_args.extend(['--ple-gguf', shard2_path])
-
-log_path = os.path.abspath('./Strata-src/strata_engine.log')
-
-config_data = {
-    'exe': strata_exe,
-    'cwd': strata_cwd,
-    'args': engine_args,
-    'pack': pack_dir,
-    'parallel': 4,
-    'port': 9932,
-    'host': '0.0.0.0',
-    'api_key': key,
-    'tokenizer': tokenizer_dir,
-    'log': log_path
-}
-
-config_path = os.path.abspath('./Strata-src/strata-config.json')
-with open(config_path, 'w', encoding='utf-8') as f:
-    json.dump(config_data, f, indent=2)
-
-print(f'Generated Strata configuration at: {config_path}')
-
-os.chdir(strata_cwd)
-
-cmd = [
-    sys.executable,
-    'serve/server.py',
-    '--engine', 'strata',
-    '--config', config_path,
-    '--tokenizer', tokenizer_dir,
-    '--host', '0.0.0.0',
-    '--port', '9932',
-    '--api-key', key
-]
-
-res = subprocess.call(cmd)
-if res != 0:
-    print('\n--- Strata Engine Error Log Output ---')
-    logs = glob.glob('*.log')
-    if logs:
-        for lf in logs:
-            print(f'=== Log File: {lf} ===')
-            with open(lf, 'r', encoding='utf-8', errors='ignore') as f:
-                lines = f.readlines()
-                print(''.join(lines[-40:]))
-    else:
-        print('No log files found in Strata-src.')
-
-sys.exit(res)
-"''', env = { STRATA_PF_FUSED = "1" } }
+cmd = ['./llama-prism/llama-server', '-m', './models/Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-PQ2_0.gguf', '-md', './models/Qwen3.8-27B-DFlash2-Q4_K_M.gguf', '--spec-type', 'draft-dflash', '--spec-draft-n-max', '7', '--reasoning-preserve', '--slot-save-path', './llama-slots', '--cors-origins', '*', '--api-key', key, '-ngl', '99', '-ngld', '99', '-sm', 'layer', '-c', '256144', '-b', '4096', '-ub', '1024', '-ctk', 'q8_0', '-ctv', 'q8_0', '-t', '8', '-np', '4', '-fa', 'on', '--no-repack', '--repeat-penalty', '1.0', '--temp', '0.65', '--host', '0.0.0.0', '--port', '9931']
+sys.exit(subprocess.call(cmd))
+"''' }
