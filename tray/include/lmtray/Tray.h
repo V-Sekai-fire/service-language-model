@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 //
-// The language-model tray, after interactor-xr-pilot's tray/ on SDL3's tray: it starts `pixi run serve`,
+// The language-model tray, after interactor-xr-pilot's tray/ on SDL3's tray: it starts the adjacent local server,
 // shows whether the port answers, and starts it again whenever it stops.
 
 #pragma once

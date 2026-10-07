@@ -13,6 +13,7 @@ zstd = ">=1.5.7,<2"
 
 [target.win-64.dependencies]
 cuda-toolkit = ">=12.4"
+go = ">=1.25"
 
 [target.linux-64.dependencies]
 cuda-toolkit = ">=12.4"
@@ -21,9 +22,9 @@ cuda-toolkit = ">=12.4"
 default = { depends-on = ["serve"] }
 
 benchmark = { cmd = "python benchmark.py", description = "Benchmark a running `pixi run serve` instance (prefill and generation tokens/s)" }
-tray-build = { cmd = "cmake -S tray -B tray/build && cmake --build tray/build --config Release", description = "Build the language-model tray (SDL3, MSVC)" }
-tray = { depends-on = ["tray-build"], cmd = "tray/build/Release/language-model-tray.exe", description = "Tray icon that starts and keeps `pixi run serve` online" }
-installer-build = { cmd = "cmake -S tray -B tray/build && cmake --build tray/build --target language-model-install --config Release", description = "Build the release asset installer" }
+tray-build = { cmd = "cmake -S tray -B tray/build && cmake --build tray/build --config Release", description = "Build the native language-model tray, offline installer, and payload-volume packer (MSVC)" }
+tray = { depends-on = ["tray-build"], cmd = "tray/build/Release/language-model-tray.exe", description = "Start the installed local language-model server from the tray" }
+installer-build = { cmd = "cmake -S tray -B tray/build && cmake --build tray/build --target language-model-install --config Release", description = "Build the macOS release asset installer" }
 
 dl-target = "hf download OS-Software/Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-GGUF Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-PQ2_0.gguf --local-dir ./models"
 dl-draft = "hf download incoai/Qwen3.8-27B-DFlash2-GGUF Qwen3.8-27B-DFlash2-Q4_K_M.gguf --local-dir ./models"

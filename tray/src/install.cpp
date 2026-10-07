@@ -1,173 +1,741 @@
-﻿// Downloads release .zst assets (or reads a local folder) and restores them. No pixi, python or zstd.exe needed.
-// Usage: language-model-install [--from <dir>] [--tag <tag>] [--repo <owner/name>]
-#include <zstd.h>
+// SPDX-License-Identifier: MPL-2.0
+
+#include <windows.h>
+#include <shellapi.h>
+#include <winhttp.h>
 
 #include <algorithm>
-#include <cerrno>
-#include <cstdio>
+#include <array>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
-#include <map>
+#include <memory>
 #include <regex>
 #include <string>
 #include <vector>
 
-#ifdef _WIN32
-#include <windows.h>
-#include <winhttp.h>
-#else
-#include <spawn.h>
-#include <sys/wait.h>
-#include <unistd.h>
-extern char** environ;
+#ifndef LM_RELEASE_TAG
+#define LM_RELEASE_TAG L""
 #endif
 
 namespace fs = std::filesystem;
+namespace
+{
+constexpr char Magic[8] = {'D', 'S', 'B', 'L', 'O', 'B', '1', '\n'};
+constexpr wchar_t ReleaseTag[] = LM_RELEASE_TAG;
+constexpr uint64_t MaxAssetBytes = 1900000000;
+using InternetHandle = std::unique_ptr<void, decltype(&WinHttpCloseHandle)>;
 
-#ifdef _WIN32
-static std::wstring widen(const std::string& s) {
-    int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, nullptr, 0);
-    std::wstring w(n, 0);
-    MultiByteToWideChar(CP_UTF8, 0, s.c_str(), -1, w.data(), n);
-    w.resize(n - 1);
-    return w;
+void notify(const std::wstring& message, const wchar_t* title, UINT flags, bool quiet)
+{
+    if (!quiet)
+        MessageBoxW(nullptr, message.c_str(), title, MB_OK | flags);
 }
-#endif
 
-// Streams an https URL into a sink; follows redirects.
-template <class Sink> static bool httpGet(const std::string& url, Sink sink) {
-#ifdef _WIN32
-    URL_COMPONENTS uc{};
-    uc.dwStructSize = sizeof(uc);
-    wchar_t host[256], path[4096];
-    uc.lpszHostName = host; uc.dwHostNameLength = 256;
-    uc.lpszUrlPath = path; uc.dwUrlPathLength = 4096;
-    std::wstring w = widen(url);
-    if (!WinHttpCrackUrl(w.c_str(), 0, 0, &uc)) return false;
-    HINTERNET s = WinHttpOpen(L"language-model-install", WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, nullptr, nullptr, 0);
-    HINTERNET c = WinHttpConnect(s, host, uc.nPort, 0);
-    HINTERNET r = WinHttpOpenRequest(c, L"GET", path, nullptr, nullptr, nullptr, uc.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0);
-    bool ok = WinHttpSendRequest(r, L"Accept: application/vnd.github+json\r\n", (DWORD)-1, nullptr, 0, 0, 0) && WinHttpReceiveResponse(r, nullptr);
-    DWORD code = 0, len = sizeof(code);
-    if (ok) WinHttpQueryHeaders(r, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, nullptr, &code, &len, nullptr);
-    ok = ok && code == 200;
-    std::vector<char> buf(1 << 20);
-    DWORD got;
-    while (ok && WinHttpReadData(r, buf.data(), (DWORD)buf.size(), &got) && got)
-        sink(buf.data(), static_cast<size_t>(got));
-    WinHttpCloseHandle(r); WinHttpCloseHandle(c); WinHttpCloseHandle(s);
-    return ok;
-#else
-    int pipefd[2];
-    if (pipe(pipefd) != 0)
+bool readU32(std::istream& input, uint32_t& value)
+{
+    std::array<unsigned char, 4> bytes{};
+    if (!input.read(reinterpret_cast<char*>(bytes.data()), bytes.size()))
         return false;
+    value = 0;
+    for (unsigned int i = 0; i < bytes.size(); ++i)
+        value |= static_cast<uint32_t>(bytes[i]) << (i * 8);
+    return true;
+}
 
-    posix_spawn_file_actions_t actions;
-    if (posix_spawn_file_actions_init(&actions) != 0) {
-        close(pipefd[0]);
-        close(pipefd[1]);
+bool readU64(std::istream& input, uint64_t& value)
+{
+    std::array<unsigned char, 8> bytes{};
+    if (!input.read(reinterpret_cast<char*>(bytes.data()), bytes.size()))
         return false;
+    value = 0;
+    for (unsigned int i = 0; i < bytes.size(); ++i)
+        value |= static_cast<uint64_t>(bytes[i]) << (i * 8);
+    return true;
+}
+
+std::wstring quote(const std::wstring& value)
+{
+    std::wstring result = L"\"";
+    size_t slashes = 0;
+    for (wchar_t c : value)
+    {
+        if (c == L'\\')
+        {
+            ++slashes;
+            continue;
+        }
+        if (c == L'"')
+            result.append(slashes * 2 + 1, L'\\');
+        else
+            result.append(slashes, L'\\');
+        result.push_back(c);
+        slashes = 0;
     }
-    posix_spawn_file_actions_adddup2(&actions, pipefd[1], STDOUT_FILENO);
-    posix_spawn_file_actions_addclose(&actions, pipefd[0]);
-    posix_spawn_file_actions_addclose(&actions, pipefd[1]);
+    result.append(slashes * 2, L'\\');
+    result.push_back(L'"');
+    return result;
+}
 
-    pid_t child = -1;
-    char curl[] = "curl";
-    char fail[] = "--fail";
-    char location[] = "--location";
-    char silent[] = "--silent";
-    char showError[] = "--show-error";
-    char userAgent[] = "--user-agent";
-    char userAgentValue[] = "language-model-install";
-    char accept[] = "--header";
-    char acceptValue[] = "Accept: application/vnd.github+json";
-    char* const argv[] = {curl, fail, location, silent, showError, userAgent,
-                          userAgentValue, accept, acceptValue, const_cast<char*>(url.c_str()), nullptr};
-    int spawnResult = posix_spawnp(&child, curl, &actions, nullptr, argv, environ);
-    posix_spawn_file_actions_destroy(&actions);
-    close(pipefd[1]);
-    if (spawnResult != 0) {
-        close(pipefd[0]);
+bool runDesync(const fs::path& executable, const std::vector<std::wstring>& args, DWORD& exitCode)
+{
+    std::wstring command = quote(executable.wstring());
+    for (const auto& arg : args)
+        command += L" " + quote(arg);
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process{};
+    if (!CreateProcessW(executable.c_str(), command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr,
+                        &startup, &process))
         return false;
+    CloseHandle(process.hThread);
+    const DWORD wait = WaitForSingleObject(process.hProcess, INFINITE);
+    const bool gotCode = wait == WAIT_OBJECT_0 && GetExitCodeProcess(process.hProcess, &exitCode);
+    CloseHandle(process.hProcess);
+    return gotCode && exitCode == 0;
+}
+
+enum class DownloadResult
+{
+    Downloaded,
+    NotFound,
+    Failed
+};
+
+DownloadResult downloadReleaseAsset(HINTERNET session, const std::wstring& name, const fs::path& destination,
+                                    std::wstring& error)
+{
+    InternetHandle connection{WinHttpConnect(session, L"github.com", INTERNET_DEFAULT_HTTPS_PORT, 0),
+                              WinHttpCloseHandle};
+    if (!connection)
+    {
+        error = L"Cannot connect to GitHub (WinHTTP error " + std::to_wstring(GetLastError()) + L").";
+        return DownloadResult::Failed;
     }
 
-    bool ok = true;
-    std::vector<char> buf(1 << 16);
-    ssize_t got;
-    while ((got = read(pipefd[0], buf.data(), buf.size())) > 0)
-        sink(buf.data(), static_cast<size_t>(got));
-    if (got < 0)
-        ok = false;
-    close(pipefd[0]);
+    std::wstring path = L"/V-Sekai-fire/service-language-model/releases/download/";
+    path += ReleaseTag;
+    path += L"/";
+    path += name;
+    InternetHandle request{WinHttpOpenRequest(connection.get(), L"GET", path.c_str(), nullptr,
+                                              WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
+                                              WINHTTP_FLAG_SECURE),
+                           WinHttpCloseHandle};
+    if (!request || !WinHttpSendRequest(request.get(), WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+                                        WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
+        !WinHttpReceiveResponse(request.get(), nullptr))
+    {
+        error = L"Cannot request " + name + L" from GitHub (WinHTTP error " + std::to_wstring(GetLastError()) + L").";
+        return DownloadResult::Failed;
+    }
 
-    int status = 0;
-    while (waitpid(child, &status, 0) < 0) {
-        if (errno != EINTR) {
-            ok = false;
+    DWORD status = 0;
+    DWORD statusSize = sizeof(status);
+    if (!WinHttpQueryHeaders(request.get(), WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                             WINHTTP_HEADER_NAME_BY_INDEX, &status, &statusSize, WINHTTP_NO_HEADER_INDEX))
+    {
+        error = L"Cannot read the GitHub response for " + name + L" (WinHTTP error " +
+                std::to_wstring(GetLastError()) + L").";
+        return DownloadResult::Failed;
+    }
+    if (status == HTTP_STATUS_NOT_FOUND)
+        return DownloadResult::NotFound;
+    if (status != HTTP_STATUS_OK)
+    {
+        error = L"GitHub returned HTTP " + std::to_wstring(status) + L" while downloading " + name + L".";
+        return DownloadResult::Failed;
+    }
+
+    DWORD contentLength = 0;
+    DWORD contentLengthSize = sizeof(contentLength);
+    const bool hasContentLength =
+        WinHttpQueryHeaders(request.get(), WINHTTP_QUERY_CONTENT_LENGTH | WINHTTP_QUERY_FLAG_NUMBER,
+                            WINHTTP_HEADER_NAME_BY_INDEX, &contentLength, &contentLengthSize,
+                            WINHTTP_NO_HEADER_INDEX) != FALSE;
+    if (hasContentLength && contentLength > MaxAssetBytes)
+    {
+        error = L"GitHub asset exceeds the supported size limit: " + name;
+        return DownloadResult::Failed;
+    }
+
+    fs::path partial = destination;
+    partial += L".part";
+    std::error_code ec;
+    fs::remove(partial, ec);
+    std::ofstream output(partial, std::ios::binary | std::ios::trunc);
+    if (!output)
+    {
+        error = L"Cannot create downloaded asset: " + partial.wstring();
+        return DownloadResult::Failed;
+    }
+
+    std::array<char, 1 << 16> buffer{};
+    uint64_t received = 0;
+    while (true)
+    {
+        DWORD available = 0;
+        if (!WinHttpQueryDataAvailable(request.get(), &available))
+        {
+            error = L"Download interrupted for " + name + L" (WinHTTP error " +
+                    std::to_wstring(GetLastError()) + L").";
             break;
         }
+        if (available == 0)
+            break;
+
+        while (available > 0)
+        {
+            DWORD read = 0;
+            const DWORD requested = static_cast<DWORD>(std::min<size_t>(available, buffer.size()));
+            if (!WinHttpReadData(request.get(), buffer.data(), requested, &read) || read == 0)
+            {
+                error = L"Download interrupted for " + name + L" (WinHTTP error " +
+                        std::to_wstring(GetLastError()) + L").";
+                break;
+            }
+            if (received + read > MaxAssetBytes)
+            {
+                error = L"GitHub asset exceeds the supported size limit: " + name;
+                break;
+            }
+            output.write(buffer.data(), read);
+            if (!output)
+            {
+                error = L"Disk write failed while downloading " + name + L".";
+                break;
+            }
+            received += read;
+            available -= read;
+        }
+        if (!error.empty())
+            break;
     }
-    return ok && WIFEXITED(status) && WEXITSTATUS(status) == 0;
-#endif
+
+    output.close();
+    if (error.empty() && !output)
+        error = L"Disk write failed while finalizing " + name + L".";
+    if (error.empty() && hasContentLength && received != contentLength)
+        error = L"GitHub sent an incomplete asset: " + name;
+    if (!error.empty())
+    {
+        fs::remove(partial, ec);
+        return DownloadResult::Failed;
+    }
+
+    fs::rename(partial, destination, ec);
+    if (ec)
+    {
+        fs::remove(partial, ec);
+        error = L"Cannot finalize downloaded asset: " + destination.wstring();
+        return DownloadResult::Failed;
+    }
+    return DownloadResult::Downloaded;
 }
 
-static bool decompressInto(const fs::path& zst, std::ofstream& out) {
-    std::ifstream in(zst, std::ios::binary);
-    ZSTD_DCtx* d = ZSTD_createDCtx();
-    std::vector<char> ib(ZSTD_DStreamInSize()), ob(ZSTD_DStreamOutSize());
-    bool ok = true;
-    while (ok && in) {
-        in.read(ib.data(), ib.size());
-        ZSTD_inBuffer i{ib.data(), (size_t)in.gcount(), 0};
-        while (i.pos < i.size) {
-            ZSTD_outBuffer o{ob.data(), ob.size(), 0};
-            if (ZSTD_isError(ZSTD_decompressStream(d, &o, &i))) { ok = false; break; }
-            out.write(ob.data(), o.pos);
+bool downloadRelease(const fs::path& destination, std::wstring& error, bool quiet)
+{
+    if (ReleaseTag[0] == L'\0')
+    {
+        error = L"This setup executable is not pinned to a release tag. Use the complete offline bundle.";
+        return false;
+    }
+
+    notify(L"Downloading the Windows payload from GitHub. This release contains several gigabytes of data.",
+           L"Online installer", MB_ICONINFORMATION, quiet);
+
+    InternetHandle session{WinHttpOpen(L"ServiceLanguageModelSetup/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+                                       WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0),
+                           WinHttpCloseHandle};
+    if (!session)
+    {
+        error = L"Cannot initialize HTTPS downloads (WinHTTP error " + std::to_wstring(GetLastError()) + L").";
+        return false;
+    }
+    if (!WinHttpSetTimeouts(session.get(), 10000, 30000, 30000, 30000))
+    {
+        error = L"Cannot configure HTTPS download timeouts (WinHTTP error " +
+                std::to_wstring(GetLastError()) + L").";
+        return false;
+    }
+
+    for (const std::wstring& name : {L"desync.exe", L"payload.caidx"})
+    {
+        if (downloadReleaseAsset(session.get(), name, destination / name, error) != DownloadResult::Downloaded)
+        {
+            if (error.empty())
+                error = L"The GitHub release is missing required asset " + name + L".";
+            return false;
         }
     }
-    ZSTD_freeDCtx(d);
-    return ok && out.good();
+
+    for (unsigned int i = 0; i < 1000; ++i)
+    {
+        wchar_t name[32]{};
+        swprintf_s(name, L"payload-data-%03u.bin", i);
+        const DownloadResult result = downloadReleaseAsset(session.get(), name, destination / name, error);
+        if (result == DownloadResult::NotFound)
+        {
+            if (i == 0)
+            {
+                error = L"The GitHub release does not contain any payload data volumes.";
+                return false;
+            }
+            return true;
+        }
+        if (result == DownloadResult::Failed)
+            return false;
+    }
+
+    error = L"The GitHub release has more data volumes than this installer supports.";
+    return false;
 }
 
-int main(int argc, char** argv) {
-    std::string from, tag = "v0.5.0-dev.2", repo = "V-Sekai-fire/service-language-model";
-    for (int i = 1; i + 1 < argc; i += 2) {
-        std::string a = argv[i];
-        (a == "--from" ? from : a == "--tag" ? tag : repo) = argv[i + 1];
+bool validChunkPath(const std::string& name)
+{
+    if (name.empty() || name.front() == '/' || name.find('\\') != std::string::npos ||
+        name.find(':') != std::string::npos || name.find('\0') != std::string::npos)
+        return false;
+    std::filesystem::path path(name);
+    if (path.is_absolute())
+        return false;
+    for (const auto& part : path)
+        if (part == "." || part == "..")
+            return false;
+    return true;
+}
+
+bool unpackVolume(const fs::path& volume, const fs::path& store, std::wstring& error)
+{
+    std::ifstream input(volume, std::ios::binary);
+    std::array<char, sizeof(Magic)> magic{};
+    uint64_t entries = 0;
+    if (!input.read(magic.data(), magic.size()) ||     magic != std::array<char, sizeof(Magic)>{'D', 'S', 'B', 'L', 'O', 'B', '1', '\n'} ||
+        !readU64(input, entries))
+    {
+        error = L"Invalid or truncated data volume: " + volume.filename().wstring();
+        return false;
     }
-    if (from.empty()) {
-        from = "dist";
-        fs::create_directories(from);
-        std::string json;
-        if (!httpGet("https://api.github.com/repos/" + repo + "/releases/tags/" + tag, [&](const char* p, size_t n) { json.append(p, n); })) {
-            std::fprintf(stderr, "cannot fetch release %s\n", tag.c_str());
+
+    for (uint64_t i = 0; i < entries; ++i)
+    {
+        uint32_t nameSize = 0;
+        uint64_t fileSize = 0;
+        if (!readU32(input, nameSize) || !readU64(input, fileSize) || nameSize == 0 || nameSize > 4096)
+        {
+            error = L"Invalid entry in data volume: " + volume.filename().wstring();
+            return false;
+        }
+        std::string name(nameSize, '\0');
+        if (!input.read(name.data(), nameSize) || !validChunkPath(name))
+        {
+            error = L"Invalid chunk path in data volume: " + volume.filename().wstring();
+            return false;
+        }
+
+        const fs::path destination = store / fs::path(name);
+        std::error_code ec;
+        fs::create_directories(destination.parent_path(), ec);
+        if (ec || fs::exists(destination))
+        {
+            error = L"Cannot create unique chunk file from " + volume.filename().wstring();
+            return false;
+        }
+        std::ofstream output(destination, std::ios::binary | std::ios::trunc);
+        if (!output)
+        {
+            error = L"Cannot write desync chunk: " + destination.wstring();
+            return false;
+        }
+        std::array<char, 1 << 16> buffer{};
+        uint64_t remaining = fileSize;
+        while (remaining > 0)
+        {
+            const auto count = static_cast<std::streamsize>(std::min<uint64_t>(remaining, buffer.size()));
+            if (!input.read(buffer.data(), count))
+            {
+                error = L"Truncated chunk in data volume: " + volume.filename().wstring();
+                return false;
+            }
+            output.write(buffer.data(), count);
+            if (!output)
+            {
+                error = L"Disk write failed while extracting: " + volume.filename().wstring();
+                return false;
+            }
+            remaining -= static_cast<uint64_t>(count);
+        }
+    }
+
+    if (input.peek() != std::char_traits<char>::eof())
+    {
+        error = L"Unexpected trailing bytes in data volume: " + volume.filename().wstring();
+        return false;
+    }
+    return true;
+}
+
+bool hasCompleteAssetBundle(const fs::path& assets)
+{
+    std::error_code ec;
+    if (!fs::is_regular_file(assets / L"desync.exe", ec) || ec ||
+        !fs::is_regular_file(assets / L"payload.caidx", ec) || ec)
+        return false;
+
+    std::vector<fs::path> volumes;
+    const std::wregex pattern(LR"(payload-data-([0-9]{3})\.bin)");
+    fs::directory_iterator entry(assets, ec);
+    const fs::directory_iterator end;
+    for (; !ec && entry != end; entry.increment(ec))
+    {
+        if (entry->is_regular_file(ec) && !ec &&
+            std::regex_match(entry->path().filename().wstring(), pattern))
+            volumes.push_back(entry->path());
+    }
+    if (ec || volumes.empty())
+        return false;
+
+    std::sort(volumes.begin(), volumes.end());
+    for (size_t i = 0; i < volumes.size(); ++i)
+    {
+        wchar_t expected[32]{};
+        swprintf_s(expected, L"payload-data-%03zu.bin", i);
+        if (volumes[i].filename().wstring() != expected)
+            return false;
+    }
+    return true;
+}
+
+bool enableAutoStart(const fs::path& target, std::wstring& error)
+{
+    const fs::path tray = target / L"language-model-tray.exe";
+    if (!fs::is_regular_file(tray))
+    {
+        error = L"Installed tray executable is missing; cannot configure sign-in startup.";
+        return false;
+    }
+
+    HKEY key = nullptr;
+    const LSTATUS openStatus = RegCreateKeyExW(HKEY_CURRENT_USER,
+                                               L"Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+                                               0, nullptr, 0, KEY_SET_VALUE, nullptr, &key, nullptr);
+    if (openStatus != ERROR_SUCCESS)
+    {
+        error = L"Cannot open the current-user startup registry key (error " +
+                std::to_wstring(openStatus) + L").";
+        return false;
+    }
+    const std::wstring command = quote(tray.wstring());
+    const DWORD bytes = static_cast<DWORD>((command.size() + 1) * sizeof(wchar_t));
+    const LSTATUS setStatus = RegSetValueExW(key, L"ServiceLanguageModel", 0, REG_SZ,
+                                             reinterpret_cast<const BYTE*>(command.c_str()), bytes);
+    RegCloseKey(key);
+    if (setStatus != ERROR_SUCCESS)
+    {
+        error = L"Cannot enable tray startup at sign-in (registry error " +
+                std::to_wstring(setStatus) + L").";
+        return false;
+    }
+    return true;
+}
+
+bool disableAutoStart(std::wstring& error)
+{
+    HKEY key = nullptr;
+    const LSTATUS openStatus = RegOpenKeyExW(HKEY_CURRENT_USER,
+                                             L"Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+                                             0, KEY_SET_VALUE, &key);
+    if (openStatus == ERROR_FILE_NOT_FOUND)
+        return true;
+    if (openStatus != ERROR_SUCCESS)
+    {
+        error = L"Cannot open the current-user startup registry key (error " +
+                std::to_wstring(openStatus) + L").";
+        return false;
+    }
+    const LSTATUS deleteStatus = RegDeleteValueW(key, L"ServiceLanguageModel");
+    RegCloseKey(key);
+    if (deleteStatus == ERROR_SUCCESS || deleteStatus == ERROR_FILE_NOT_FOUND)
+        return true;
+    error = L"Cannot remove tray startup at sign-in (registry error " +
+            std::to_wstring(deleteStatus) + L").";
+    return false;
+}
+
+int uninstall(const fs::path& target, bool quiet)
+{
+    std::wstring error;
+    if (!disableAutoStart(error))
+    {
+        notify(error, L"Uninstaller: startup removal failed", MB_ICONERROR, quiet);
+        return 1;
+    }
+
+    if (!fs::exists(target))
+    {
+        notify(L"Startup registration removed; the application is already absent.",
+               L"Uninstaller", MB_ICONINFORMATION, quiet);
+        return 0;
+    }
+    if (!fs::is_regular_file(target / L"language-model-tray.exe"))
+    {
+        notify(L"Startup registration was removed, but the install directory does not contain "
+               L"the language-model tray. Files were left untouched:\n" + target.wstring(),
+               L"Uninstaller", MB_ICONERROR, quiet);
+        return 1;
+    }
+
+    std::error_code ec;
+    fs::remove_all(target, ec);
+    if (ec)
+    {
+        notify(L"Startup registration was removed, but the application files could not be deleted. "
+               L"Exit the language-model tray and retry:\n" + target.wstring(),
+               L"Uninstaller", MB_ICONERROR, quiet);
+        return 1;
+    }
+    notify(L"Application uninstalled and sign-in startup removed.",
+           L"Uninstaller", MB_ICONINFORMATION, quiet);
+    return 0;
+}
+
+int install(const fs::path& assets, const fs::path& target, bool quiet)
+{
+    const fs::path desync = assets / L"desync.exe";
+    const fs::path index = assets / L"payload.caidx";
+    if (!fs::is_regular_file(desync) || !fs::is_regular_file(index))
+    {
+        notify(L"Required setup assets are missing. Keep setup.exe, desync.exe, payload.caidx, and every "
+               L"payload-data volume together for offline installation, or run setup.exe --online.",
+               L"Installer: missing files", MB_ICONERROR, quiet);
+        return 1;
+    }
+
+    std::vector<fs::path> volumes;
+    const std::wregex pattern(LR"(payload-data-([0-9]{3})\.bin)");
+    for (const auto& entry : fs::directory_iterator(assets))
+    {
+        std::wsmatch match;
+        const std::wstring name = entry.path().filename().wstring();
+        if (entry.is_regular_file() && std::regex_match(name, match, pattern))
+            volumes.push_back(entry.path());
+    }
+    std::sort(volumes.begin(), volumes.end());
+    if (volumes.empty())
+    {
+        notify(L"No payload-data-*.bin volumes were found beside setup.exe.",
+               L"Installer: missing data", MB_ICONERROR, quiet);
+        return 1;
+    }
+    for (size_t i = 0; i < volumes.size(); ++i)
+    {
+        wchar_t expected[32]{};
+        swprintf_s(expected, L"payload-data-%03zu.bin", i);
+        if (volumes[i].filename().wstring() != expected)
+        {
+            notify(L"The data-volume set is incomplete or out of sequence.",
+                   L"Installer: incomplete data", MB_ICONERROR, quiet);
             return 1;
         }
-        std::regex re(R"x("browser_download_url"\s*:\s*"([^"]+\.zst(?:\.\d{3})?)")x");
-        for (std::sregex_iterator it(json.begin(), json.end(), re), end; it != end; ++it) {
-            std::string url = (*it)[1], name = url.substr(url.rfind('/') + 1);
-            std::printf("download %s\n", name.c_str());
-            std::ofstream f(fs::path(from) / name, std::ios::binary);
-            if (!httpGet(url, [&](const char* p, size_t n) { f.write(p, n); })) { std::fprintf(stderr, "failed: %s\n", name.c_str()); return 1; }
+    }
+
+    wchar_t temp[MAX_PATH + 1]{};
+    const DWORD tempLength = GetTempPathW(MAX_PATH, temp);
+    if (tempLength == 0 || tempLength > MAX_PATH)
+    {
+        notify(L"Cannot find the temporary directory.", L"Installer", MB_ICONERROR, quiet);
+        return 1;
+    }
+    const fs::path store = fs::path(temp) /
+                           (L"service-language-model-" + std::to_wstring(GetCurrentProcessId()));
+    std::error_code ec;
+    if (!fs::create_directory(store, ec) || ec)
+    {
+        notify(L"Cannot create a temporary directory for the payload.", L"Installer",
+               MB_ICONERROR, quiet);
+        return 1;
+    }
+
+    int result = 1;
+    do
+    {
+        std::wstring error;
+        for (const auto& volume : volumes)
+        {
+            if (!unpackVolume(volume, store, error))
+                break;
+        }
+        if (!error.empty())
+        {
+            notify(error, L"Installer: invalid data", MB_ICONERROR, quiet);
+            break;
+        }
+
+        std::error_code createError;
+        fs::create_directories(target, createError);
+        if (createError)
+        {
+            notify(L"Cannot create install directory:\n" + target.wstring(), L"Installer",
+                   MB_ICONERROR, quiet);
+            break;
+        }
+
+        DWORD exitCode = 1;
+        if (!runDesync(desync, {L"verify", L"--store", store.wstring()}, exitCode))
+        {
+            const std::wstring message = L"Desync rejected the reconstructed chunk store. Exit code: " +
+                                         std::to_wstring(exitCode);
+            notify(message, L"Installer: data verification failed", MB_ICONERROR, quiet);
+            break;
+        }
+        if (!runDesync(desync, {L"untar", L"--index", L"--store", store.wstring(), index.wstring(),
+                                target.wstring()},
+                       exitCode))
+        {
+            const std::wstring message = L"Desync could not restore the offline payload. Exit code: " +
+                                         std::to_wstring(exitCode);
+            notify(message, L"Installer: restore failed", MB_ICONERROR, quiet);
+            break;
+        }
+        if (!enableAutoStart(target, error))
+        {
+            notify(error, L"Installer: startup configuration failed", MB_ICONERROR, quiet);
+            break;
+        }
+        notify(L"Installation complete. The language-model tray will start at sign-in:\n" + target.wstring(),
+               L"Installer", MB_ICONINFORMATION, quiet);
+        result = 0;
+    } while (false);
+
+    fs::remove_all(store, ec);
+    return result;
+}
+} // namespace
+
+int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
+{
+    std::vector<wchar_t> module(32768);
+    const DWORD length = GetModuleFileNameW(nullptr, module.data(), static_cast<DWORD>(module.size()));
+    if (length == 0 || length == module.size())
+    {
+        MessageBoxW(nullptr, L"Cannot determine setup.exe location.", L"Installer", MB_OK | MB_ICONERROR);
+        return 1;
+    }
+    fs::path assets = fs::path(std::wstring(module.data(), length)).parent_path();
+    wchar_t* programData = nullptr;
+    size_t programDataLength = 0;
+    if (_wdupenv_s(&programData, &programDataLength, L"ProgramData") != 0 || programData == nullptr)
+    {
+        MessageBoxW(nullptr, L"Cannot determine the shared ProgramData folder.", L"Installer",
+                    MB_OK | MB_ICONERROR);
+        return 1;
+    }
+    fs::path target = fs::path(programData) / L"V-Sekai" / L"ServiceLanguageModel";
+    free(programData);
+
+    bool quiet = false;
+    int argumentCount = 0;
+    wchar_t** arguments = CommandLineToArgvW(GetCommandLineW(), &argumentCount);
+    if (arguments == nullptr)
+    {
+        MessageBoxW(nullptr, L"Cannot read setup arguments.", L"Installer", MB_OK | MB_ICONERROR);
+        return 1;
+    }
+    bool online = false;
+    bool offline = false;
+    bool removeInstall = false;
+    bool fromSpecified = false;
+    bool targetSpecified = false;
+    for (int i = 1; i < argumentCount; ++i)
+    {
+        const std::wstring option = arguments[i];
+        if (option == L"--quiet")
+            quiet = true;
+        else if (option == L"--online")
+            online = true;
+        else if (option == L"--offline")
+            offline = true;
+        else if (option == L"--uninstall")
+            removeInstall = true;
+        else if ((option == L"--from" || option == L"--target") && i + 1 < argumentCount)
+        {
+            const fs::path value = arguments[++i];
+            (option == L"--from" ? assets : target) = value;
+            if (option == L"--from")
+                fromSpecified = true;
+            else
+                targetSpecified = true;
+        }
+        else
+        {
+            LocalFree(arguments);
+            MessageBoxW(nullptr, L"Usage: setup.exe [--online | --offline] [--from <asset-folder>] "
+                                 L"[--target <folder>] [--uninstall] [--quiet]",
+                        L"Installer", MB_OK | MB_ICONERROR);
+            return 2;
         }
     }
-    std::regex zre(R"((.+)\.zst(\.\d{3})?$)");
-    std::map<std::string, std::vector<fs::path>> groups;
-    for (auto& e : fs::directory_iterator(from)) {
-        std::smatch m;
-        std::string n = e.path().filename().string();
-        if (std::regex_match(n, m, zre)) groups[m[1]].push_back(e.path());
+    LocalFree(arguments);
+
+    if ((online && offline) || (online && fromSpecified) ||
+        (removeInstall && (online || offline || fromSpecified || targetSpecified)))
+    {
+        notify(L"Choose one install mode, or run --uninstall by itself.", L"Installer", MB_ICONERROR, quiet);
+        return 2;
     }
-    for (auto& [name, parts] : groups) {
-        std::sort(parts.begin(), parts.end());
-        std::string rel = std::regex_replace(name, std::regex("__"), "/");
-        fs::path dest = rel;
-        if (dest.has_parent_path()) fs::create_directories(dest.parent_path());
-        std::ofstream out(dest, std::ios::binary);
-        for (auto& p : parts)
-            if (!decompressInto(p, out)) { std::fprintf(stderr, "failed: %s\n", p.string().c_str()); return 1; }
-        std::printf("%s\n", rel.c_str());
+
+    if (removeInstall)
+        return uninstall(fs::absolute(target), quiet);
+
+    fs::path downloadedAssets;
+    if (online || (!offline && !fromSpecified && !hasCompleteAssetBundle(assets)))
+    {
+        if (!online)
+        {
+            if (quiet)
+            {
+                notify(L"Offline assets are incomplete. Use setup.exe --online to download them.",
+                       L"Installer: missing files", MB_ICONERROR, quiet);
+                return 1;
+            }
+            const int choice = MessageBoxW(
+                nullptr, L"The complete offline payload is not beside setup.exe.\n\n"
+                         L"Download the payload from GitHub now? This release contains several gigabytes of data.",
+                L"Online installer", MB_YESNO | MB_ICONQUESTION);
+            if (choice != IDYES)
+                return 0;
+        }
+
+        wchar_t temp[MAX_PATH + 1]{};
+        const DWORD tempLength = GetTempPathW(MAX_PATH, temp);
+        if (tempLength == 0 || tempLength > MAX_PATH)
+        {
+            notify(L"Cannot find the temporary directory.", L"Installer", MB_ICONERROR, quiet);
+            return 1;
+        }
+        downloadedAssets = fs::path(temp) /
+                           (L"service-language-model-download-" + std::to_wstring(GetCurrentProcessId()));
+        std::error_code ec;
+        if (!fs::create_directory(downloadedAssets, ec) || ec)
+        {
+            notify(L"Cannot create a temporary download directory.", L"Installer", MB_ICONERROR, quiet);
+            return 1;
+        }
+
+        std::wstring error;
+        if (!downloadRelease(downloadedAssets, error, quiet))
+        {
+            notify(error, L"Installer: download failed", MB_ICONERROR, quiet);
+            fs::remove_all(downloadedAssets, ec);
+            return 1;
+        }
+        assets = downloadedAssets;
     }
-    return 0;
+
+    const int result = install(fs::absolute(assets), fs::absolute(target), quiet);
+    if (!downloadedAssets.empty())
+    {
+        std::error_code ec;
+        fs::remove_all(downloadedAssets, ec);
+    }
+    return result;
 }
