@@ -1,0 +1,75 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (default v0.5.0-dev.3)"
+        default: "v0.5.0-dev.3"
+        required: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+
+      - name: Install zstd
+        run: |
+          choco install -y zstd
+
+      - name: Install Pixi
+        run: |
+          curl -L https://get.pixi.dev/install.ps1 -o pixi-install.ps1
+          powershell -ExecutionPolicy Bypass -File pixi-install.ps1
+
+      - name: Cache models
+        uses: actions/cache@v4
+        with:
+          path: models
+          key: models-${{ hashFiles('models/**') }}
+          restore-keys: |
+            models-
+
+      - name: Cache llama-prism
+        uses: actions/cache@v4
+        with:
+          path: llama-prism
+          key: llama-prism-${{ hashFiles('llama-prism/**') }}
+          restore-keys: |
+            llama-prism-
+
+      - name: Build release
+        run: |
+          .\release.ps1 -Tag "${{ inputs.tag }}" -SkipPublish
+
+      - name: List assets
+        run: |
+          ls release/${{ inputs.tag }}/assets/
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag }}
+          files: release/${{ inputs.tag }}/assets/*
+          prerelease: true
+          body: |
+            Windows online/offline installer. Run setup.exe with an Internet connection to download this exact release, or download every asset beside setup.exe for a fully offline installation. The offline restore uses the single payload.caidx index. Data volumes contain unchanged desync zstd chunks.
+
+      - name: Keep only latest release
+        run: |
+          $tag = "${{ inputs.tag }}"
+          $releases = gh release list --json name -q '.[].name'
+          foreach ($r in $releases) {
+            if ($r -ne $tag -and $r -notlike "dev.local-validation*") {
+              gh release delete $r --confirm
+            }
+          }
