@@ -56,25 +56,14 @@ if not os.path.exists(target):
 "''' }
 
 serve = { depends-on = ["dl-target", "dl-draft", "dl-prism"], cmd = '''python -c "
-import os, secrets, subprocess, sys
+import serve_common
 os.makedirs('llama-slots', exist_ok=True)
-env_file = '.env'
-key = None
-if os.path.exists(env_file):
-    with open(env_file, 'r') as f:
-        for line in f:
-            if line.strip().startswith('LLAMA_API_KEY='):
-                key = line.strip().split('=', 1)[1].strip(' ' + chr(34) + chr(39))
-                break
-if not key:
-    key = secrets.token_hex(16)
-    with open(env_file, 'a') as f:
-        f.write(f'LLAMA_API_KEY={key}\n')
-    print('Generated new LLAMA_API_KEY in .env')
-else:
-    print('Loaded LLAMA_API_KEY from .env')
-
-cmd = [r'.\llama-prism\llama-server.exe', '-m', r'.\models\Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-PQ2_0.gguf', '-md', r'.\models\Qwen3.8-27B-DFlash2-Q4_K_M.gguf', '--spec-type', 'draft-dflash', '--spec-draft-n-max', '7', '--reasoning-preserve', '--slot-save-path', r'.\llama-slots', '--cors-origins', '*', '--api-key', key, '-ngl', '99', '-ngld', '99', '-sm', 'layer', '-c', '242144', '-b', '4096', '-ub', '1024', '-ctk', 'q8_0', '-ctv', 'q8_0', '-t', '8', '-np', '1', '-fa', 'on', '--no-repack', '--repeat-penalty', '1.0', '--temp', '0.65', '--host', '0.0.0.0', '--port', '9931']
+key = serve_common.ensure_key()
+port = serve_common.pick_port()
+cmd = serve_common.serve_cmd(r'.\llama-prism\llama-server.exe')
+cmd[cmd.index('--api-key')+1] = key
+cmd[cmd.index('--port')+1] = str(port)
+import subprocess, sys
 sys.exit(subprocess.call(cmd))
 "''', env = { CUDA_VISIBLE_DEVICES = "0,1" } }
 
@@ -114,25 +103,14 @@ if not os.path.exists(target):
 "''' }
 
 serve = { depends-on = ["dl-target", "dl-draft", "dl-prism"], cmd = '''python -c "
-import os, secrets, subprocess, sys
+import serve_common
 os.makedirs('llama-slots', exist_ok=True)
-env_file = '.env'
-key = None
-if os.path.exists(env_file):
-    with open(env_file, 'r') as f:
-        for line in f:
-            if line.strip().startswith('LLAMA_API_KEY='):
-                key = line.strip().split('=', 1)[1].strip(' ' + chr(34) + chr(39))
-                break
-if not key:
-    key = secrets.token_hex(16)
-    with open(env_file, 'a') as f:
-        f.write(f'LLAMA_API_KEY={key}\n')
-    print('Generated new LLAMA_API_KEY in .env')
-else:
-    print('Loaded LLAMA_API_KEY from .env')
-
-cmd = ['./llama-prism/llama-server', '-m', './models/Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-PQ2_0.gguf', '-md', './models/Qwen3.8-27B-DFlash2-Q4_K_M.gguf', '--spec-type', 'draft-dflash', '--spec-draft-n-max', '7', '--reasoning-preserve', '--slot-save-path', './llama-slots', '--cors-origins', '*', '--api-key', key, '-ngl', '99', '-ngld', '99', '-sm', 'layer', '-c', '242144', '-b', '4096', '-ub', '1024', '-ctk', 'q8_0', '-ctv', 'q8_0', '-t', '8', '-np', '1', '-fa', 'on', '--no-repack', '--repeat-penalty', '1.0', '--temp', '0.65', '--host', '0.0.0.0', '--port', '9931']
+key = serve_common.ensure_key()
+port = serve_common.pick_port()
+cmd = serve_common.serve_cmd('./llama-prism/llama-server')
+cmd[cmd.index('--api-key')+1] = key
+cmd[cmd.index('--port')+1] = str(port)
+import subprocess, sys
 sys.exit(subprocess.call(cmd))
 "''', env = { CUDA_VISIBLE_DEVICES = "0,1" } }
 
@@ -173,25 +151,14 @@ if not os.path.exists(target):
 "''' }
 
 serve = { depends-on = ["dl-target", "dl-draft", "dl-prism"], cmd = '''python -c "
-import os, secrets, subprocess, sys
+import serve_common
 os.makedirs('llama-slots', exist_ok=True)
-env_file = '.env'
-key = None
-if os.path.exists(env_file):
-    with open(env_file, 'r') as f:
-        for line in f:
-            if line.strip().startswith('LLAMA_API_KEY='):
-                key = line.strip().split('=', 1)[1].strip(' ' + chr(34) + chr(39))
-                break
-if not key:
-    key = secrets.token_hex(16)
-    with open(env_file, 'a') as f:
-        f.write(f'LLAMA_API_KEY={key}\n')
-    print('Generated new LLAMA_API_KEY in .env')
-else:
-    print('Loaded LLAMA_API_KEY from .env')
-
-cmd = ['./llama-prism/llama-server', '-m', './models/Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-PQ2_0.gguf', '-md', './models/Qwen3.8-27B-DFlash2-Q4_K_M.gguf', '--spec-type', 'draft-dflash', '--spec-draft-n-max', '7', '--reasoning-preserve', '--slot-save-path', './llama-slots', '--cors-origins', '*', '--api-key', key, '-ngl', '99', '-ngld', '99', '-sm', 'layer', '-c', '242144', '-b', '4096', '-ub', '1024', '-ctk', 'q8_0', '-ctv', 'q8_0', '-t', '6', '-np', '1', '-fa', 'on', '--no-repack', '--repeat-penalty', '1.0', '--temp', '0.65', '--host', '0.0.0.0', '--port', '9931']
+key = serve_common.ensure_key()
+port = serve_common.pick_port()
+cmd = serve_common.serve_cmd('./llama-prism/llama-server')
+cmd[cmd.index('--api-key')+1] = key
+cmd[cmd.index('--port')+1] = str(port)
+import subprocess, sys
 sys.exit(subprocess.call(cmd))
 "''' }
 
@@ -232,24 +199,13 @@ if not os.path.exists(target):
 "''' }
 
 serve = { depends-on = ["dl-target", "dl-draft", "dl-prism"], cmd = '''python -c "
-import os, secrets, subprocess, sys
+import serve_common
 os.makedirs('llama-slots', exist_ok=True)
-env_file = '.env'
-key = None
-if os.path.exists(env_file):
-    with open(env_file, 'r') as f:
-        for line in f:
-            if line.strip().startswith('LLAMA_API_KEY='):
-                key = line.strip().split('=', 1)[1].strip(' ' + chr(34) + chr(39))
-                break
-if not key:
-    key = secrets.token_hex(16)
-    with open(env_file, 'a') as f:
-        f.write(f'LLAMA_API_KEY={key}\n')
-    print('Generated new LLAMA_API_KEY in .env')
-else:
-    print('Loaded LLAMA_API_KEY from .env')
-
-cmd = ['./llama-prism/llama-server', '-m', './models/Ternary-Bonsai-2-27B-Uncensored-Heretic-v2-PQ2_0.gguf', '-md', './models/Qwen3.8-27B-DFlash2-Q4_K_M.gguf', '--spec-type', 'draft-dflash', '--spec-draft-n-max', '7', '--reasoning-preserve', '--slot-save-path', './llama-slots', '--cors-origins', '*', '--api-key', key, '-ngl', '99', '-ngld', '99', '-sm', 'layer', '-c', '242144', '-b', '4096', '-ub', '1024', '-ctk', 'q8_0', '-ctv', 'q8_0', '-t', '8', '-np', '1', '-fa', 'on', '--no-repack', '--repeat-penalty', '1.0', '--temp', '0.65', '--host', '0.0.0.0', '--port', '9931']
+key = serve_common.ensure_key()
+port = serve_common.pick_port()
+cmd = serve_common.serve_cmd('./llama-prism/llama-server')
+cmd[cmd.index('--api-key')+1] = key
+cmd[cmd.index('--port')+1] = str(port)
+import subprocess, sys
 sys.exit(subprocess.call(cmd))
 "''' }

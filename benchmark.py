@@ -12,6 +12,13 @@ import time
 import urllib.error
 import urllib.request
 
+def _default_port():
+    try:
+        with open(".port") as f:
+            return f.read().strip()
+    except OSError:
+        return None
+    return None
 PROMPT = (
     "Write a long, detailed technical essay about how speculative decoding speeds up "
     "large language model inference, covering draft models, verification, acceptance "
@@ -90,7 +97,9 @@ def summarize(results, wall):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--url", default="http://127.0.0.1:9931")
+    default_url = ("http://127.0.0.1:" + _default_port() if _default_port()
+                   else "http://127.0.0.1:9931")
+    p.add_argument("--url", default=default_url)
     p.add_argument("--n-predict", type=int, default=256, help="tokens generated per request")
     p.add_argument("--prompt-repeat", type=int, default=40, help="prompt length multiplier (~45 tokens each)")
     p.add_argument("--runs", type=int, default=3, help="measured runs per concurrency level")
