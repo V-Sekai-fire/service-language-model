@@ -11,3 +11,4 @@
 /dist/
 /.vscode/
 /release/
+__pycache__
