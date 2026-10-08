@@ -88,8 +88,8 @@ function Set-GitHubReleaseToken {
     }
 }
 
-if ($Tag -notmatch '^dev\.[A-Za-z0-9.-]+$') {
-    throw "Release tag must begin with dev.: $Tag"
+if ($Tag -notmatch 'dev\.[A-Za-z0-9.-]+$') {
+    throw "Release tag must end with dev.<version>: $Tag"
 }
 
 if (Test-Path -LiteralPath $releaseDir) {
