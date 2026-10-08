@@ -3,6 +3,7 @@
 /llama-prism
 /prism.tar.gz
 /.env
+/.port
 /llama-slots/
 /llama-prism-src/
 /tray/build/
